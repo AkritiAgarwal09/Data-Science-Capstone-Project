@@ -1,0 +1,10 @@
+
+
+# Local caches and regenerable EDA exports
+.DS_Store
+.venv/
+.mplconfig/
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+eda/output/
