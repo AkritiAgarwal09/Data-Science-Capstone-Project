@@ -31,6 +31,23 @@ Financial institutions often work with datasets that contain missing values, imb
 
 This capstone investigates whether synthetic-data generation and automated data-repair workflows can improve model development while preserving important properties of the original dataset.
 
+## Setup
+
+1. Install [uv](https://docs.astral.sh/uv/).
+   - **Mac users:** also run `brew install libomp` (needed by XGBoost and LightGBM).
+2. From the repo root, run `uv sync`. This creates `.venv` with the exact package versions in `uv.lock`.
+3. Run code with `uv run ...`. For notebooks, run `uv run jupyter lab`, or select `.venv` as the kernel in VS Code.
+
+To add a package, run `uv add <package>`, then commit both `pyproject.toml` and `uv.lock`. Don't use pip, conda or a requirements.txt.
+
+## Repository layout
+
+- `src/agentic_gan/`: the system (orchestrator, agents, tools, schemas)
+- `docs/`: architecture and design docs
+- `eda/`: exploratory notebooks and baseline models
+- `tests/`: automated tests
+- `runs/`: pipeline run outputs, created at runtime and not tracked
+
 Academic Context
 
 This repository contains work completed for the Data Science Capstone within the M.S. in Data Science program at Columbia University.
