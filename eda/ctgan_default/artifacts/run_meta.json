@@ -1,0 +1,51 @@
+{
+  "dataset": "default",
+  "settings_version": "v1",
+  "input": "data/interim/default/train_cleaned.csv",
+  "rows": 18000,
+  "positive_count": 3982,
+  "negative_count": 14018,
+  "class_gap": 10036,
+  "target": "y",
+  "target_value": 1,
+  "discrete": [
+    "SEX",
+    "EDUCATION",
+    "MARRIAGE",
+    "PAY_1",
+    "PAY_2",
+    "PAY_3",
+    "PAY_4",
+    "PAY_5",
+    "PAY_6"
+  ],
+  "epochs": 300,
+  "batch_size": 500,
+  "pac": 10,
+  "discriminator_steps": 1,
+  "generator_dim": [
+    256,
+    256
+  ],
+  "discriminator_dim": [
+    256,
+    256
+  ],
+  "device": "cpu",
+  "seed": 42,
+  "train_seconds": 503.5,
+  "sampled_rows": 5018,
+  "outputs": {
+    "fill10": "data/interim/default/synthetic/default_ctgan_fill10.csv",
+    "fill25": "data/interim/default/synthetic/default_ctgan_fill25.csv",
+    "fill50": "data/interim/default/synthetic/default_ctgan_fill50.csv"
+  },
+  "model": "eda/ctgan_default/artifacts/ctgan_default.pkl",
+  "losses": "eda/ctgan_default/artifacts/ctgan_losses.csv",
+  "validation_and_test_read": false,
+  "settings_source": "bank v1",
+  "conditional": true,
+  "rake_columns": [],
+  "sampling": "conditional on y=1",
+  "v2_settings": "not available"
+}

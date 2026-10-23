@@ -1,0 +1,43 @@
+{
+  "dataset": "polish",
+  "settings_version": "v1",
+  "settings_source": "bank v1",
+  "input": "data/interim/polish/train_cleaned.csv",
+  "rows": 26043,
+  "positive_count": 1255,
+  "negative_count": 24788,
+  "class_gap": 23533,
+  "target": "bankrupt",
+  "target_value": 1,
+  "discrete": [
+    "cohort"
+  ],
+  "epochs": 300,
+  "batch_size": 500,
+  "pac": 10,
+  "discriminator_steps": 1,
+  "generator_dim": [
+    256,
+    256
+  ],
+  "discriminator_dim": [
+    256,
+    256
+  ],
+  "device": "cpu",
+  "seed": 42,
+  "conditional": true,
+  "rake_columns": [],
+  "sampling": "conditional on bankrupt=1",
+  "train_seconds": 1229.7,
+  "sampled_rows": 11766,
+  "outputs": {
+    "fill10": "data/interim/polish/synthetic/polish_ctgan_fill10.csv",
+    "fill25": "data/interim/polish/synthetic/polish_ctgan_fill25.csv",
+    "fill50": "data/interim/polish/synthetic/polish_ctgan_fill50.csv"
+  },
+  "model": "eda/ctgan_polish/artifacts/ctgan_polish.pkl",
+  "losses": "eda/ctgan_polish/artifacts/ctgan_losses.csv",
+  "v2_settings": "not available",
+  "validation_and_test_read": false
+}

@@ -45,6 +45,12 @@ def test_sample_minority_flagged(trained):
     assert out["age"].dtype.kind == "i"
 
 
+def test_unconditional_sample_still_keeps_target(trained):
+    out = sample_synthetic(trained, 20, target_value=1, seed=1, conditional=False)
+    assert len(out) == 20
+    assert (out["y"] == 1).all()
+
+
 def test_dedupe_against_real(trained, df):
     out = sample_synthetic(trained, 30, drop_duplicates_of=df)
     assert len(out) == 30
