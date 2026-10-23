@@ -175,6 +175,9 @@ def sample_synthetic(
     If ``drop_duplicates_of``
     is given (e.g. the real training split, same columns), rows that exactly copy a real
     row or an earlier synthetic row are dropped and resampled, up to ``max_rounds``.
+    CTGAN's conditioning is soft, so rows with the wrong target value are also dropped.
+    ``conditional=False`` samples without asking for the target value and keeps the matching
+    rows, which shows whether the conditioning itself skews other columns.
     """
     if isinstance(n, bool) or not isinstance(n, int) or n <= 0:
         raise ValueError("n must be a positive integer")

@@ -12,6 +12,8 @@ runs/
 
 # Third-party data we may not redistribute (IEEE-CIS: Kaggle rules, section 7B)
 data/external/
+# Cleaned and synthetic IEEE-CIS rows are derived from it, so they stay out of git too
+data/interim/ieee_cis/
 
 # API keys and secrets
 .env

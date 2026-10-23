@@ -1,0 +1,17 @@
+column,kind,real_vs_real,fill10,fill25,fill50
+age,numeric,0.045,0.0764,0.0733,0.0781
+job,categorical,0.0481,0.283,0.2792,0.2742
+marital,categorical,0.0124,0.1175,0.1236,0.1324
+education,categorical,0.0333,0.0975,0.0971,0.0892
+default,categorical,0.0003,0.009,0.0122,0.0138
+balance,numeric,0.0264,0.085,0.0895,0.0928
+housing,categorical,0.0143,0.1145,0.1129,0.1132
+loan,categorical,0.0111,0.016,0.0122,0.0091
+contact,categorical,0.006,0.0474,0.0378,0.0405
+day_of_month,numeric,0.0159,0.2312,0.2299,0.2304
+month,categorical,0.0402,0.1772,0.174,0.1738
+campaign,numeric,0.012,0.0908,0.0877,0.0986
+pdays,numeric,0.0289,0.1372,0.1332,0.1336
+previous,numeric,0.0251,0.0622,0.0559,0.0537
+poutcome,categorical,0.0257,0.1271,0.1187,0.1166
+previously_contacted,categorical,0.0251,0.0622,0.0559,0.0537

@@ -2,6 +2,8 @@
 
 Issue #24. Analysis by `eda/fraud/fraud_analysis.py`, run on the raw ULB file (`creditcard.csv`, 284,807 rows, 492 fraud). Prepared 15 October 2026 for the mentor meeting on 16 October.
 
+**Update, 22 October (issue #50).** The mentor confirmed IEEE-CIS as the main fraud dataset, because ULB has only 284 training fraud rows. ULB stays as the stress case. How IEEE-CIS enters the pipeline (the settings entry, the duplicate policy, the split by `TransactionDT`, the training sample and the data-use rules) is under "Adding IEEE-CIS" in section 4.
+
 ## Recommendation: adjust, do not replace
 
 The mentors' question was whether to proceed, adjust or replace this dataset. I recommend **adjust**:
@@ -10,7 +12,7 @@ The mentors' question was whether to proceed, adjust or replace this dataset. I 
 2. **Use the stratified 60/20/20 split as the primary split**, made after the duplicates are dropped. Report a split by time as a sensitivity check.
 3. **Set the fill-level grid per dataset.** For this dataset use 0.01, 0.02, 0.05 and 0.10, not the default grid that goes up to 1.0.
 4. **Treat it as the stress case.** With 284 training positives, a result of no gain from synthetic data is expected and is a reportable result.
-5. **Add IEEE-CIS as a second fraud dataset, as its own run, under the data-use restrictions in section 4.** Rows cannot be merged into this dataset. IEEE-CIS is the one real, large candidate. The other candidates were set aside (section 4).
+5. **Use IEEE-CIS as the main fraud dataset, as its own run, under the data-use restrictions in section 4** (confirmed by the mentor on 22 October). Rows cannot be merged into this dataset. IEEE-CIS is the one real, large candidate. The other candidates were set aside (section 4).
 
 ## 1. Duplicates
 
@@ -112,27 +114,54 @@ Run on 16 October with `eda/fraud/candidates/analyze_candidates.py` and `ieee_re
 | Fraud in train / val / test | 12,398 / 4,133 / 4,132 | 554 / 185 / 184 | 8,491 / 2,830 / 2,830 |
 | Missing values | 41.1% of cells. 374 of 394 columns have gaps and 174 are over 50% empty | None. Placeholders instead: 320 rows with `Age = 0` (all in the "16 to 17" bin), the string `none` in four columns | None |
 | Exact duplicates | 3 | 0 | 0 |
-| Val and test rows with a copy in train | not checked beyond the 3 duplicates | 0 and 0 | 0 duplicates |
+| Val and test rows with a copy in train | 74 and 55 repeat a train row at another time, none fraud (time split, see Adding IEEE-CIS) | 0 and 0 | 0 duplicates |
 | Fraud rate by time split (train / val / test) | 3.38% / 3.90% / 3.44% | not applicable (three policy years, 1994 to 1996) | 12.5% / 4.6% / 4.6% |
 | Signal, validation PR-AUC (chance) | 0.58 on a 100k subsample (0.035). 0.53 on the 109 columns with at most 5% missing, 0.57 on the 179 with at most 20% | 0.28 (0.06). Logistic regression 0.17 | 0.33 (0.09) on the basic columns, 0.62 with time-to-purchase and hour, 0.72 with device sharing |
-| Fill level 1.0 (times real positives) | 329,528 rows (26.6). In a 100k subsample, 55,802 (26.6) | 8,144 rows (14.7) | 73,685 rows (8.7) |
+| Fill level 1.0 (times real positives) | 329,528 rows (26.6). In the stratified 100k subsample measured then, 55,802 (26.6). The sample to use is under Adding IEEE-CIS | 8,144 rows (14.7) | 73,685 rows (8.7) |
 
 Things worth knowing:
 
-- **IEEE-CIS.** The fraud rate is steady over its 182 days, so a time split is a fair primary split here, unlike ULB. Only 24.4% of rows have an identity record, and those are far likelier to be fraud (7.85% against 2.09%). A 100k subsample keeps 3.5% fraud and gives 2,099 training fraud rows.
+- **IEEE-CIS.** The fraud rate is steady over its 182 days, so a time split is a fair primary split here, unlike ULB. Only 24.4% of rows have an identity record, and those are far likelier to be fraud (7.85% against 2.09%). A 100k sample drawn from the time-split train part keeps 3.4% fraud and gives 3,383 fraud rows (see "Adding IEEE-CIS"; the 2,099 measured on 16 October was for a stratified split).
 - **Vehicle insurance claims.** `PolicyNumber` is just the row number (1 to 15,420). The fraud rate varies a lot by policy type (13.8% for Sport - Collision, 0.7% for Sedan - Liability). Nothing in the file shows whether it is real or a sample dataset.
 - **Fraud ecommerce.** The 7,600 purchases within a minute of sign-up are all fraud, and devices shared by several users are 52.5% fraud. A GAN test on it would mostly learn those rules.
 
 ### Adding IEEE-CIS
 
-**Why.** It has 20,663 fraud rows (12,398 in a stratified train part), so a generator has thousands of real positives to learn from, unlike ULB. Its features are masked raw columns, not PCA components. Its fraud rate is steady over time (3.38%, 3.90%, 3.44% across a time split). It has real missing values, so it is a second testbed for the data-repair step.
+**Status.** The mentor confirmed IEEE-CIS as the main fraud dataset on 22 October. The settings below are the `ieee_cis` entry in `src/agentic_gan/utils/datasets.json`. They were measured with `eda/fraud/ieee_cis_split.py` on the files downloaded on 16 October. The preprocessing script does not read the entry yet: the join, the duplicate rule and the time split are the IEEE-CIS preprocessing issue.
 
-**Plan if approved** (not started):
+**Why.** It has 20,663 fraud rows, so a generator has thousands of real positives to learn from, unlike ULB. Its features are masked raw columns, not PCA components. Its fraud rate is steady over time (3.38%, 3.90% and 3.44% across the time split below). It has real missing values, so it is a second testbed for the data-repair step.
 
-1. Each member who will use it accepts the competition rules and downloads their own copy of `train_transaction.csv` and `train_identity.csv`.
-2. Join the identity table (24.4% of rows have a record), take a 100k stratified subsample that keeps the 3.5% fraud rate (2,099 training fraud rows), and keep the columns with at most 5% to 20% missing (109 to 179 columns).
-3. Same split policy as ULB: stratified 60/20/20 as primary and a time split as a check. Fill levels 0.10 to 1.00 add 5,580 to 55,802 rows (2.7 to 27 times the real positives).
-4. Add it to `utils/datasets.json` and the run config, with its discrete columns, so the preprocessing script and CTGAN tool can read it.
+| Setting | Value |
+|---|---|
+| Files | `data/external/ieee-fraud-detection/train_transaction.csv` and `train_identity.csv`. Each person downloads their own copy; git ignores the folder |
+| Join | identity left-joined onto transactions, one to one, on `TransactionID`: 590,540 rows and 434 columns (394 transaction, 40 identity) |
+| Target and key | `isFraud`; `TransactionID` is the row key and never a feature |
+| Discrete columns | 49, the categorical columns named on the competition's data page: `ProductCD`, `card1` to `card6`, `addr1`, `addr2`, `P_emaildomain`, `R_emaildomain`, `M1` to `M9`, `DeviceType`, `DeviceInfo`, `id_12` to `id_38` |
+| Duplicates | exact copies dropped before the split, keyed on every column except `TransactionID`, first copy kept |
+| Split | by `TransactionDT`, 60/20/20 by rows, cut points 8,745,772 and 12,192,842 |
+| Sample | stratified on `isFraud`, 100,000 rows from the train part, seed 42; columns more than 20% empty in the sample are dropped |
+
+**The join.** 24.4% of transactions (144,233) have an identity record. Those are fraud 7.85% of the time, against 2.09% for the rest, so having a record carries signal. The other rows keep empty identity columns. An indicator column for "has an identity record" is a cheap addition for Pre-processing.
+
+**Duplicate policy.** An exact copy is a row identical in every column except `TransactionID`, `TransactionDT` included. There are 3, none fraud. They are dropped before the split and the first copy is kept, as for ULB. Rows with the same values at a different time are kept: 476 extra copies, 3 of them fraud, which look like genuine repeat payments. Eight groups of rows with identical features (time ignored) carry both labels, and they stay too. Copies share a timestamp, so a time split cannot put one in each part. After the split, 74 validation rows and 55 test rows repeat a train row at another time, and none is fraud.
+
+**Split by time.** Order the rows by `TransactionDT` (182 days from the first transaction to the last), after the 3 copies are dropped. The first 60% is train, the next 20% validation and the last 20% test. A row is in train if `TransactionDT` is below the first cut point, in validation if it is below the second, and in test otherwise. The split is stored as that rule, not as a list of IDs (see "Data-use restrictions"); `splits/ieee_cis_time_split.csv` holds the counts.
+
+| Part | `TransactionDT` | Day (`TransactionDT` over 86,400) | Rows | Fraud rows | Fraud rate |
+|---|---|---|---:|---:|---:|
+| Train | below 8,745,772 | 1 to 101 | 354,322 | 11,988 | 3.38% |
+| Validation | 8,745,772 to below 12,192,842 | 101 to 141 | 118,107 | 4,611 | 3.90% |
+| Test | 12,192,842 and above | 141 to 183 | 118,108 | 4,064 | 3.44% |
+
+The fraud rate is steady, so a time split is a fair primary split here, unlike ULB. With 4,611 fraud rows in validation and 4,064 in test, recall is known to about 1 point at recall 0.8, against about 8 for ULB.
+
+**Size and the sample.** The train part is 354,322 rows, and CTGAN's cost grows with rows and columns. Bank Marketing (27,126 rows, 17 columns) took 519 seconds on CPU. So CTGAN should not train on the whole train part. Draw a sample:
+
+- **How it is drawn.** After the duplicates are dropped and the split is made, take 100,000 rows from the train part only (rows in file order), stratified on `isFraud`, seed 42 (`train_test_split(train_rows, train_size=100_000, stratify=isFraud, random_state=42)`). Validation and test stay whole.
+- **What it gives.** 100,000 rows, of which 3,383 are fraud (3.38%). The class gap is 93,234, so fill levels 0.10, 0.25, 0.50, 0.75 and 1.00 add 9,323, 23,308, 46,617, 69,926 and 93,234 rows (2.8 to 27.6 times the real fraud rows).
+- **Same sample for every arm.** Baseline, SMOTE and GAN all train on it, so they start from the same real rows and the fill levels come from its class gap.
+- **Columns.** Dropping columns that are more than 20% empty in the sample leaves 179 of the 431 (109 are at most 5% empty). Only 10 of the 49 discrete columns survive. Six of those have many categories: `card1` (7,663), `card2` (499), `addr1` (195), `card5` (90), `card3` (79) and `P_emaildomain` (59). Cap them to the most frequent categories and fold the rest, or treat them as numbers, before CTGAN, because its one-hot encoding cannot take thousands of categories.
+- **Check the time first.** 100,000 rows by 179 columns is about 39 times the cells of the Bank run. Time a short run on a smaller sample before spending GPU credit, and if it is too slow draw a smaller sample the same way. The validation and test parts do not change.
 
 **Data-use restrictions** (Kaggle competition rules, section 7, read on 16 October):
 
@@ -144,12 +173,14 @@ Things worth knowing:
 
 Our reading of what the rules do not say, to confirm with the mentors or TD:
 
-- Synthetic rows generated from the data may count as derived from it, so they stay private (inside `runs/`, which is ignored by git) and are not published.
+- Synthetic rows generated from the data may count as derived from it, so they stay private (inside `runs/` or `data/interim/ieee_cis/`, which are ignored by git) and are not published.
 - The report and poster show aggregate results (metrics, plots of distributions), not rows.
 
 **Set aside.** The vehicle insurance claims set (CC0, 554 training fraud rows, moderate signal, real or sample status unknown) stays available as a quick dry-run dataset. Fraud ecommerce, Elliptic, Bank Account Fraud, Sparkov and the 2023 card data are excluded for the reasons in the table above.
 
-**Recommendation.** Ask the mentors on 16 October. Do not download further, build the subsample or change the config before they answer.
+**Still open.** Rule 7A allows non-commercial use only. Whether TD's sponsorship counts as commercial use is a question for TD, and nothing in the repository says it has been answered.
+
+**Where the data lives.** The entry points into `data/external/`, which git ignores. Cleaned tables and synthetic rows go to `data/interim/ieee_cis/` or `runs/`, which git ignores too. The split is a rule and counts, not a list of IDs, and `eda/fraud/ieee_cis_split.py` writes aggregates only.
 
 ### If we kept ULB on its own
 
@@ -162,21 +193,21 @@ The mentors suggested adding fraud rows to this dataset. That is not possible (t
 5. **Train the generator on the fraud rows only**, with a small network, early stopping and the distance-to-closest-record check, because 284 rows are easy to memorise.
 6. **Report a time split** as a sensitivity check (section 2).
 
-Even then, a result of no reliable gain is the likely outcome, and it is a valid result for the stress case. The measurement noise is why a second dataset helps: with 4,133 fraud rows in the IEEE-CIS validation part, recall is known to about 1 point, and about 3 in the 100k subsample.
+Even then, a result of no reliable gain is the likely outcome, and it is a valid result for the stress case. The measurement noise is why a second dataset helps: with 4,611 fraud rows in the IEEE-CIS validation part (time split), recall is known to about 1 point.
 
 ## 5. What this changes in the pipeline
 
 These need team agreement before anyone builds them:
 
 - **Where deduplication lives.** If duplicates are dropped before the split, it belongs in the orchestrator's split step, not in Pre-processing. The doc's principle that the split comes before any cleaning still holds, because exact-row deduplication on the raw table is not modelling-side cleaning, but it is a change to section 4. It needs a config option and a branch in `split_data`.
-- **Split strategy.** The time split becomes an option in the split step (`split_strategy`), as the issue said.
+- **Split strategy.** The time split becomes an option in the split step (`split_strategy`), as the issue said. It is the primary split for IEEE-CIS (`split.strategy` is `time` in its settings entry) and a sensitivity check for ULB.
 - **Pre-processing rule.** Section 5.1's row "Exact duplicate rows: drop only inside the training split" should say that exact duplicates are removed before the split, keyed on the full raw row.
-- **Row-ID files.** `splits/` now holds the recommended split: stratified, and by time, both after deduplication, plus the list of dropped rows. See `splits/README.md`.
+- **Row-ID files.** `splits/` now holds the recommended split: stratified, and by time, both after deduplication, plus the list of dropped rows. IEEE-CIS has no ID file: its split is a rule with cut points plus counts, because the data may not be redistributed. See `splits/README.md`.
 
 ## Questions for the mentors
 
 1. Is ULB acceptable as the extreme-imbalance stress case, with a no-gain result reported as a result?
-2. Do they agree to IEEE-CIS as the second fraud dataset, under its non-commercial and no-redistribution terms? Does TD need to confirm that a sponsored capstone qualifies?
+2. IEEE-CIS as the main fraud dataset: confirmed by the mentor on 22 October. Still open: does TD need to confirm that a sponsored capstone qualifies as non-commercial use?
 3. Do they want the time split reported as a sensitivity check?
 
 ## Sources

@@ -1,0 +1,4 @@
+file,exact_train_copies,synthetic_duplicates,dcr_ratio,synthetic_median_distance,validation_median_distance,real_vs_synthetic_auc,real_vs_real_auc,real_only_pr_auc,augmented_pr_auc,pr_auc_gain,real_only_best_f1,augmented_best_f1,best_f1_gain,auc_sd,real_vs_real_auc_sd,revealing_columns
+fill10,0.0,0.0,1.116772,1.745219,1.562734,0.854125,0.517723,0.404794,0.379941,-0.024853,0.447732,0.416311,-0.031421,0.014958,0.029966,"job,day_of_month,month,balance,pdays"
+fill25,0.0,0.0,1.105623,1.727795,1.562734,0.862554,0.517723,0.404794,0.35327,-0.051524,0.447732,0.396208,-0.051524,0.004744,0.029966,"job,day_of_month,month,pdays,balance"
+fill50,0.0,0.0,1.107957,1.731442,1.562734,0.8651,0.517723,0.404794,0.331127,-0.073667,0.447732,0.37136,-0.076371,0.003609,0.029966,"job,day_of_month,month,balance,pdays"

@@ -1,0 +1,17 @@
+column,importance,distance
+age,0.0054,0.0781
+job,0.0024,0.2742
+marital,0.0038,0.1324
+education,0.0005,0.0892
+default,0.0,0.0138
+balance,0.0089,0.0928
+housing,0.0219,0.1132
+loan,0.001,0.0091
+contact,0.0784,0.0405
+day_of_month,0.0708,0.2304
+month,0.1457,0.1738
+campaign,0.0055,0.0986
+pdays,0.0084,0.1336
+previous,0.0057,0.0537
+poutcome,0.1285,0.1166
+previously_contacted,0.0001,0.0537

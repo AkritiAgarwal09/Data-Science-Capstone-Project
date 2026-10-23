@@ -1,0 +1,13 @@
+{
+  "splits": 100,
+  "reference_rows": 2115,
+  "rows_per_set": 1058,
+  "mean": 1.0023,
+  "sd": 0.0146,
+  "p5": 0.9826,
+  "min": 0.9681,
+  "max": 1.038,
+  "share_below_1.00": 0.52,
+  "share_below_0.95": 0.0,
+  "share_below_0.90": 0.0
+}

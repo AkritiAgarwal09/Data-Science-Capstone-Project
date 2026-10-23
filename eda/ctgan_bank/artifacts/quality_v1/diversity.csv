@@ -1,0 +1,3 @@
+set,unique_profiles,top10_share,entropy_bits,job_entropy_bits,month_entropy_bits,education_entropy_bits
+real subscribers,1846.0,0.0511,10.418,3.127,3.385,1.604
+"v1, same number of rows",1663.0,0.0838,10.035,2.568,3.138,1.529

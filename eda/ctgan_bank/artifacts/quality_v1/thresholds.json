@@ -1,0 +1,38 @@
+{
+  "starting (QualityThresholds)": {
+    "mean_column_distance": 0.1,
+    "worst_column_distance": 0.25,
+    "spearman_diff": 0.1,
+    "cramers_v_diff": 0.1,
+    "label_balance": 0.01,
+    "schema_match": 0.0,
+    "rule:pdays_poutcome": 0.0,
+    "rule:previously_contacted_pdays": 0.0,
+    "rule:previous_pdays": 0.0,
+    "rule:pdays_range": 0.0
+  },
+  "suggested": {
+    "mean_column_distance": 0.05,
+    "worst_column_distance": 0.1,
+    "spearman_diff": 0.045,
+    "cramers_v_diff": 0.065,
+    "rule:pdays_poutcome": 0.005,
+    "rule:previously_contacted_pdays": 0.005,
+    "rule:previous_pdays": 0.005,
+    "rule:pdays_range": 0.005,
+    "label_balance": 0.01,
+    "schema_match": 0.0
+  },
+  "real_vs_real": {
+    "mean_column_distance": 0.023098943144454282,
+    "worst_column_distance": 0.04805611143646443,
+    "spearman_diff": 0.020093757979161544,
+    "cramers_v_diff": 0.030949662687622562,
+    "rule:pdays_poutcome": 0.0,
+    "rule:previously_contacted_pdays": 0.0,
+    "rule:previous_pdays": 0.0,
+    "rule:pdays_range": 0.0,
+    "label_balance": 0.0,
+    "schema_match": 0.0
+  }
+}

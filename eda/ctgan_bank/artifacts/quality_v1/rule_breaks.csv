@@ -1,0 +1,7 @@
+set,rows,pdays=-1 but poutcome known,pdays>-1 but poutcome unknown,share_breaking
+real train subscribers,3173.0,0.0,2.0,0.0006
+"real train, all rows",27126.0,0.0,5.0,0.0002
+real validation subscribers,1058.0,0.0,0.0,0.0
+synthetic fill10,2078.0,18.0,13.0,0.0149
+synthetic fill25,5195.0,37.0,46.0,0.016
+synthetic fill50,10390.0,72.0,112.0,0.0177

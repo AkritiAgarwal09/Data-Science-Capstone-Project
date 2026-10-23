@@ -16,6 +16,12 @@ class DatasetConfig:
     include_duration: bool = False
     audit_file: str | None = None
     cohorts: tuple[str, ...] = ()
+    # Optional settings for a dataset that is more than one flat file. None for the others.
+    # `split` may also carry strategy "time" with time_column and cut_points.
+    id_column: str | None = None  # row key, never a feature
+    merge: dict | None = None  # second table joined onto `file`: file, on, how
+    duplicates: dict | None = None  # drop, ignore_columns, keep, before_split
+    sample: dict | None = None  # part, rows, stratify, seed, max_missing
 
 
 def load_configs(path=None):

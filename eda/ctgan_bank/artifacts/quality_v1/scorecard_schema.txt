@@ -1,0 +1,36 @@
+check                            limit  real-vs-real   fill10   fill25   fill50
+-------------------------------  -----  ------------  -------  -------  -------
+mean_column_distance             0.100         0.023  0.108 *  0.106 *  0.106 *
+worst_column_distance            0.250         0.048  0.283 *  0.279 *  0.274 *
+spearman_diff                    0.100         0.020    0.067    0.066    0.066
+cramers_v_diff                   0.100         0.031    0.053    0.046    0.046
+rule:pdays_poutcome              0.000         0.000  0.015 *  0.016 *  0.018 *
+rule:previously_contacted_pdays  0.000         0.000    0.000    0.000    0.000
+rule:previous_pdays              0.000         0.000    0.000    0.000    0.000
+rule:pdays_range                 0.000         0.000    0.000    0.000    0.000
+label_balance                    0.010         0.000    0.000    0.000    0.000
+schema_match                     0.000         0.000    0.000    0.000    0.000
+worst column                                     job      job      job      job
+rows                                            1058     2078     5195    10390
+verdict                                         PASS     FAIL     FAIL     FAIL
+
+column (distance)            kind  real-vs-real   fill10   fill25   fill50
+--------------------  -----------  ------------  -------  -------  -------
+age                       numeric         0.045    0.076    0.073    0.078
+job                   categorical         0.048  0.283 *  0.279 *  0.274 *
+marital               categorical         0.012    0.118    0.124    0.132
+education             categorical         0.033    0.098    0.097    0.089
+default               categorical         0.000    0.009    0.012    0.014
+balance                   numeric         0.026    0.085    0.089    0.093
+housing               categorical         0.014    0.114    0.113    0.113
+loan                  categorical         0.011    0.016    0.012    0.009
+contact               categorical         0.006    0.047    0.038    0.041
+day_of_month              numeric         0.016    0.231    0.230    0.230
+month                 categorical         0.040    0.177    0.174    0.174
+campaign                  numeric         0.012    0.091    0.088    0.099
+pdays                     numeric         0.029    0.137    0.133    0.134
+previous                  numeric         0.025    0.062    0.056    0.054
+poutcome              categorical         0.026    0.127    0.119    0.117
+previously_contacted  categorical         0.025    0.062    0.056    0.054
+
+* = above the limit (3,173 real training rows as the reference)

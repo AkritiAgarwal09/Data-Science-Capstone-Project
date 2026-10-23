@@ -1,0 +1,5 @@
+part,rule,transaction_dt_from,transaction_dt_to,rows,fraud_rows,fraud_rate
+train,TransactionDT < 8745772,86400,8745770,354322,11988,0.033834
+validation,8745772 <= TransactionDT < 12192842,8745772,12192743,118107,4611,0.039041
+test,TransactionDT >= 12192842,12192842,15811131,118108,4064,0.034409
+train_sample,"stratified on isFraud, 100000 rows of the train part, seed 42",86400,8745617,100000,3383,0.03383

@@ -84,3 +84,9 @@ def test_sample_clipped_rounded_and_filtered(trained, df):
     assert (out["age"] >= 40).all()
     assert out["income"].between(lo, hi).all()
     assert "age" in trained.integer_valued and "income" not in trained.integer_valued
+
+
+def test_unconditional_sampling_keeps_only_target_rows(trained):
+    out = sample_synthetic(trained, 20, target_value=1, conditional=False)
+    assert len(out) == 20
+    assert (out["y"] == 1).all() and (out["is_synthetic"] == 1).all()
