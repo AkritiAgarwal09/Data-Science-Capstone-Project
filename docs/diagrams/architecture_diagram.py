@@ -18,12 +18,7 @@ LINE = "#4B5563"
 ORCH = ("#E4E9EF", "#52606D")
 AGENT = ("#D9E8F6", "#2F6DA3")
 GATE = ("#FBE8B8", "#B7791F")
-ARMS = {
-    "raw": ("#E7E9EC", "#6B7280"),
-    "baseline": ("#D6EEDD", "#2F855A"),
-    "smote": ("#FADADD", "#B83280"),
-    "gan": ("#E6DDF6", "#6B46C1"),
-}
+LLM = ("#D5EEEC", "#2C7A7B")
 
 
 def box(ax, x, y, w, h, text, colours, size=11.5, bold=False):
@@ -81,166 +76,172 @@ def arrow(ax, points, label=None, label_at=None, size=10):
         )
 
 
+TOP = 69  # top edge of the agent cards
+
+
+def card(ax, x, title, code, llm):
+    """An agent: what the code does on top, its one bounded LLM step underneath."""
+    w = 23
+    box(ax, x, TOP - 20, w, 20, "", AGENT)
+    ax.text(x + w / 2, TOP - 4, title, ha="center", va="center", fontsize=10.6, weight="bold")
+    ax.text(x + w / 2, TOP - 12.5, code, ha="center", va="center", fontsize=9.2, linespacing=1.4)
+    box(ax, x, TOP - 34, w, 12, llm, LLM, size=9.2)
+    arrow(ax, [(x + w / 2, TOP - 34.6), (x + w / 2, 27.4)])
+
+
 def draw(path: Path) -> None:
-    fig, ax = plt.subplots(figsize=(16, 9.9))
+    fig, ax = plt.subplots(figsize=(16, 10))
     ax.set_xlim(0, 160)
-    ax.set_ylim(0, 99)
+    ax.set_ylim(0, 100)
     ax.axis("off")
 
-    ax.text(2, 96, "Agentic GAN framework: system overview", fontsize=19, weight="bold", color=INK)
+    ax.text(
+        2, 96.3, "Agentic GAN framework: system overview", fontsize=19, weight="bold", color=INK
+    )
     ax.text(
         2,
-        92.3,
-        "v0.2, 16 October 2026. Sub-agents never call each other; the orchestrator "
-        "routes every step.",
+        92.6,
+        "v0.3, 29 October 2026. Code decides every route, verdict and number. Each agent may add "
+        "one bounded LLM step.",
         fontsize=11.5,
         color=LINE,
     )
 
-    # top row: config to quality gate
-    box(ax, 2, 64, 15, 14, "Run config\n+ dataset", ORCH)
-    box(ax, 22, 64, 22, 14, "S0 (orchestrator)\nvalidate schema,\nsplit 60/20/20", ORCH)
-    box(ax, 49, 64, 25, 14, "Pre-processing Agent\nprofile and clean:\nraw + baseline files", AGENT)
+    # orchestration layer
     box(
         ax,
-        79,
-        64,
-        28,
-        14,
-        "Model Selection Agent\nchoose GAN, train,\none set per fill level",
-        AGENT,
-    )
-    gx, gy = 128, 71
-    ax.add_patch(
-        Polygon(
-            [(gx - 17, gy), (gx, gy + 11), (gx + 17, gy), (gx, gy - 11)],
-            closed=True,
-            fc=GATE[0],
-            ec=GATE[1],
-            lw=1.8,
-        )
-    )
-    ax.text(
-        gx,
-        gy,
-        "Quality Evaluation\nAgent: gate\nper fill level",
-        ha="center",
-        va="center",
-        fontsize=11,
-        color=INK,
-        linespacing=1.35,
-    )
-
-    arrow(ax, [(17.5, 71), (21.4, 71)])
-    arrow(ax, [(44.6, 71), (48.4, 71)])
-    arrow(ax, [(74.6, 71), (78.4, 71)])
-    arrow(ax, [(107.6, 71), (111, 71)])
-
-    # retry loop above
-    arrow(ax, [(gx, gy + 11), (gx, 84), (93, 84), (93, 78.7)])
-    ax.text(
-        111,
-        87.2,
-        "FAIL, attempts left:\nretry with the failed report",
-        fontsize=10.5,
-        color=INK,
-        ha="center",
-        va="center",
-        linespacing=1.3,
-    )
-
-    # bottom row: training to evaluation
-    box(
-        ax,
-        104,
-        36,
-        48,
-        15,
-        "Model Training Agent\nthe same models on four arms,\nover all seeds",
-        AGENT,
-    )
-    box(
-        ax,
-        62,
-        36,
-        32,
-        15,
-        "Volume rule (orchestrator)\nsmallest fill level with\na reliable gain, else none",
+        2,
+        78,
+        112,
+        12,
+        "Orchestration layer (code)\n"
+        "run config + dataset  >  S0 validate and split  >  stage order, retries, gate routing,\n"
+        "rule lock, volume rule.  Sub-agents never call each other.\n"
+        "state.json   manifest.json   decisions.jsonl   run folder: report, logs, artifacts",
         ORCH,
+        size=10.2,
     )
-    box(ax, 22, 36, 32, 15, "Evaluation Agent\nmetrics, SHAP, segments,\nreport", AGENT)
-
-    arrow(
+    box(
         ax,
-        [(gx - 6, gy - 7.3), (gx - 6, 52)],
-        "PASS: passing\nfill levels",
-        (gx - 13, 58),
-        size=10.5,
+        118,
+        78,
+        40,
+        12,
+        "LLM: writes the run narrative\nfrom the decision log.\nIt cannot change a route.",
+        LLM,
+        size=10.2,
     )
-    arrow(ax, [(gx + 17, gy), (156, gy), (156, 43.5), (152.7, 43.5)])
+
+    # agents, left to right, with the gate routing between quality and training
+    xs = [2, 28.5, 55, 92, 135]
+    card(
+        ax,
+        xs[0],
+        "Pre-processing\nAgent",
+        "profile and clean;\nfit on train rows only;\nraw + baseline files",
+        "LLM: picks each\ncolumn's treatment\nfrom the allowed table",
+    )
+    card(
+        ax,
+        xs[1],
+        "Model Selection\nAgent",
+        "rule picks the generator;\ntrain CTGAN; one set\nper fill level",
+        "LLM: explains the rule;\non a fail, proposes\nCTGAN settings inside\ngan_bounds",
+    )
+    card(
+        ax,
+        xs[2],
+        "Quality Evaluation\nAgent",
+        "fidelity, privacy and\nutility checks decide\nthe verdict per level",
+        "LLM: diagnoses a FAIL\nwith allowed fixes;\nthe verdict stays code",
+    )
+    card(
+        ax,
+        xs[3],
+        "Model Training\nAgent",
+        "4 models on 4 arms (raw,\nbaseline, smote, gan),\nall seeds, frozen cutoffs",
+        "LLM: plans arms and\nlevels, writes the\nrun summary",
+    )
+    card(
+        ax,
+        xs[4],
+        "Evaluation\nAgent",
+        "metrics, arm comparison,\nreliable gain, segments,\nSHAP, number check",
+        "LLM: writes the\nnarrative; every number\nmust be in the results",
+    )
+    box(
+        ax,
+        118.5,
+        TOP - 20,
+        13,
+        20,
+        "Volume rule\n(code)\nsmallest fill\nlevel with a\nreliable gain,\nelse none",
+        ORCH,
+        size=9.2,
+    )
+    box(ax, 118.5, TOP - 34, 13, 12, "no LLM\nstep", ORCH, size=9.2)
+
+    mid = TOP - 10
+    for left, right in ((25.4, 28.1), (51.9, 54.6), (115.4, 118.1), (131.9, 134.6)):
+        arrow(ax, [(left, mid), (right, mid)])
+    arrow(ax, [(78.4, TOP - 6), (91.6, TOP - 6)])
+    arrow(ax, [(78.4, TOP - 14), (91.6, TOP - 14)])
+    ax.text(85, TOP - 2.6, "PASS: passing\nfill levels", fontsize=9, ha="center", va="center")
     ax.text(
-        154.5,
-        56,
-        "FAIL, attempts exhausted:\nno GAN arm, run continues",
-        fontsize=10.5,
-        color=INK,
-        ha="right",
+        85,
+        TOP - 19,
+        "FAIL, attempts\nexhausted:\nno GAN arm",
+        fontsize=9,
+        ha="center",
         va="center",
-        linespacing=1.3,
+        linespacing=1.25,
     )
-    arrow(ax, [(103.4, 43.5), (94.6, 43.5)])
-    arrow(ax, [(61.4, 43.5), (54.6, 43.5)])
 
-    box(ax, 22, 17, 32, 11, "Run folder\nreport, logs, artifacts", ORCH)
-    arrow(ax, [(38, 35.4), (38, 28.7)])
-
-    # arms under training
-    arms = [
-        ("raw", "no repair"),
-        ("baseline", "cleaned,\nimputed"),
-        ("smote", "+ SMOTE\nrows"),
-        ("gan", "+ synthetic\nrows"),
-    ]
-    centres = []
-    for i, (name, note) in enumerate(arms):
-        x = 104 + i * 12.3
-        box(ax, x, 18, 11.2, 13, f"{name}\n{note}", ARMS[name], size=10.2)
-        ax.plot([x + 5.6, x + 5.6], [31.4, 33], color=LINE, lw=1.4)
-        centres.append(x + 5.6)
-    ax.plot([centres[0], centres[-1]], [33, 33], color=LINE, lw=1.4)
-    ax.plot([128, 128], [33, 35.4], color=LINE, lw=1.4)
+    # retry loop above the quality gate
+    arrow(ax, [(66.5, TOP + 0.4), (66.5, TOP + 3.8), (40, TOP + 3.8), (40, TOP + 0.6)])
     ax.text(
-        128,
-        14.6,
-        "Four arms. Fill level: share of the class gap, set per dataset.",
-        fontsize=10.5,
-        color=LINE,
+        53.2,
+        TOP + 5.8,
+        "FAIL, attempts left: retry with the failed report",
+        fontsize=9.6,
+        color=INK,
         ha="center",
         va="center",
     )
 
-    # orchestrator band
-    ax.add_patch(
-        FancyBboxPatch(
-            (2, 2.5),
-            156,
-            7.5,
-            boxstyle="round,pad=0.3,rounding_size=1.6",
-            fc=ORCH[0],
-            ec=ORCH[1],
-            lw=1.6,
+    # shared LLM runtime
+    box(
+        ax,
+        2,
+        12,
+        156,
+        15,
+        "Shared LLM runtime: src/agentic_gan/llm (run_llm_step), used by all six LLM steps\n"
+        "Gemini on Vertex AI, temperature 0; the answer must fit the step's Pydantic schema\n"
+        "Guardrails:  allowed options and bounds   |   rule-hash lock   |   "
+        "one retry, then a deterministic fallback   |   every step logged",
+        LLM,
+        size=10.4,
+    )
+
+    # legend
+    for x, colours, label in (
+        (2, AGENT, "agent: code does the work"),
+        (40, LLM, "bounded LLM step"),
+        (70, ORCH, "orchestration, code only"),
+    ):
+        ax.add_patch(
+            FancyBboxPatch(
+                (x, 4.2),
+                3.6,
+                2.4,
+                boxstyle="round,pad=0.1,rounding_size=0.6",
+                fc=colours[0],
+                ec=colours[1],
+                lw=1.4,
+            )
         )
-    )
-    ax.text(
-        80,
-        6.25,
-        "Orchestrator: owns control flow, retries and the audit trail.   "
-        "state.json   manifest.json   decisions.jsonl",
-        ha="center",
-        va="center",
-        fontsize=11.5,
-        color=INK,
-    )
+        ax.text(x + 5.4, 5.4, label, fontsize=10, color=INK, va="center")
 
     fig.savefig(path, dpi=200, bbox_inches="tight", facecolor="white")
     plt.close(fig)

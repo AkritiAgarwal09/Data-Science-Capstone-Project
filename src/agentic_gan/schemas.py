@@ -11,7 +11,7 @@ hash matches, is the manifest's job (orchestrator/manifest.py).
 from enum import StrEnum
 from itertools import pairwise
 from pathlib import Path
-from typing import Annotated, Any, ClassVar, Self
+from typing import Annotated, Any, ClassVar, Literal, Self
 
 import yaml
 from pydantic import (
@@ -343,8 +343,31 @@ class LevelReport(Schema):
         return self
 
 
+# What a diagnosis may suggest changing. Model selection turns these into settings inside the
+# config bounds; the numbers are never chosen here.
+Adjustment = Literal["more_epochs", "change_pac", "rebalance_categories", "change_sampling"]
+
+
+class QualityDiagnosis(Schema):
+    """Why a quality report failed and what to try next. It explains the verdict, never sets it."""
+
+    failed_checks: list[str]
+    columns: list[str]
+    likely_cause: str
+    adjustments: list[Adjustment]
+
+    @model_validator(mode="after")
+    def _filled_in(self) -> Self:
+        if not (self.failed_checks and self.likely_cause.strip() and self.adjustments):
+            raise ValueError("a diagnosis needs failed checks, a likely cause and an adjustment")
+        return self
+
+
 class QualityReport(Outcome):
-    """Quality Evaluation to Orchestrator. A FAIL verdict is a result, not a failed stage."""
+    """Quality Evaluation to Orchestrator. A FAIL verdict is a result, not a failed stage.
+
+    On a FAIL, `diagnosis` rides along to model selection in the retry request.
+    """
 
     required_on_success: ClassVar[tuple[str, ...]] = ("verdict", "levels", "report_path")
 
@@ -352,6 +375,7 @@ class QualityReport(Outcome):
     levels: list[LevelReport] = Field(default_factory=list)
     report_path: Path | None = None
     plot_paths: list[Path] = Field(default_factory=list)
+    diagnosis: QualityDiagnosis | None = None
 
     @model_validator(mode="after")
     def _verdict_matches_levels(self) -> Self:
