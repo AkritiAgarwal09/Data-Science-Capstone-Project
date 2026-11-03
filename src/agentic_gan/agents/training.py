@@ -4,6 +4,7 @@ The file-based agent consumes unencoded raw/cleaned splits with source_row IDs.
 Only training rows may be augmented. Thresholds are never tuned by this agent.
 """
 
+import hashlib
 import json
 import re
 import warnings
@@ -13,6 +14,7 @@ from pathlib import Path
 import joblib
 import numpy as np
 import pandas as pd
+from scipy import sparse
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import RepeatedStratifiedKFold
@@ -20,10 +22,23 @@ from threadpoolctl import threadpool_limits
 
 from agentic_gan.orchestrator.decisions import log_decision
 from agentic_gan.orchestrator.manifest import RunDir
-from agentic_gan.schemas import Arm, ModelRecord, Status, TrainingOutput, TrainingRequest, fill_rows
+from agentic_gan.schemas import (
+    Arm,
+    ModelRecord,
+    Status,
+    TrainingOutput,
+    TrainingRequest,
+    TreatmentPlan,
+    fill_rows,
+)
 from agentic_gan.tools import baselines as baselines
 from agentic_gan.tools.baselines import load_protocol, run_models
-from agentic_gan.tools.preprocessing import Preprocessor, load_dataset, normalize
+from agentic_gan.tools.preprocessing import (
+    Preprocessor,
+    TreatmentPreprocessor,
+    load_dataset,
+    normalize,
+)
 from agentic_gan.tools.smotenc import smotenc_rows
 from agentic_gan.utils.datasets import load_configs
 from agentic_gan.utils.synthetic import IS_SYNTHETIC
@@ -39,9 +54,10 @@ ARM_LABELS = {Arm.RAW: "original", Arm.BASELINE: "cleaned", Arm.SMOTE: "smotenc"
 class ArmEncoder(TransformerMixin, BaseEstimator):
     """Cloneable encoder that excludes synthetic rows even inside stacking folds."""
 
-    def __init__(self, config, original=False):
+    def __init__(self, config, original=False, plan=None):
         self.config = config
         self.original = original
+        self.plan = plan
 
     def fit(self, X, y):
         real = X[IS_SYNTHETIC].eq(0).to_numpy()
@@ -56,6 +72,14 @@ class ArmEncoder(TransformerMixin, BaseEstimator):
                 self.config.imputation,
                 sparse_output=self.config.name == "ieee_cis",
             ).fit(data)
+        elif self.plan is not None:
+            # Synthetic rows may contribute extra cleaned columns to the union schema.
+            columns = [c for c in self.plan.source_columns if c in data]
+            data = data[columns].copy()
+            data[self.config.target] = np.asarray(y)[real]
+            self.encoder_ = TreatmentPreprocessor(
+                self.config, self.plan.treatments, self.plan.excluded
+            ).fit(data)
         else:
             data[self.config.target] = np.asarray(y)[real]
             self.encoder_ = Preprocessor(
@@ -67,7 +91,21 @@ class ArmEncoder(TransformerMixin, BaseEstimator):
         data = X.drop(columns=IS_SYNTHETIC)
         if self.original:
             return self.encoder_.transform(data)
-        return self.encoder_.transform_cleaned(data).to_numpy()
+        if self.plan is not None:
+            blocks, positions = [], []
+            for synthetic in (False, True):
+                mask = X[IS_SYNTHETIC].eq(int(synthetic)).to_numpy()
+                if not mask.any():
+                    continue
+                frame = data.iloc[np.flatnonzero(mask)]
+                if not synthetic:
+                    frame = frame[[c for c in self.plan.source_columns if c in frame]]
+                    frame = self.encoder_.clean(frame)
+                blocks.append(self.encoder_.transform_features(frame))
+                positions.extend(np.flatnonzero(mask))
+            combined = sparse.vstack(blocks) if sparse.issparse(blocks[0]) else np.vstack(blocks)
+            return combined[np.argsort(positions)]
+        return self.encoder_.transform_features(data)
 
 
 def _read_real(files, config, run):
@@ -139,8 +177,56 @@ def _find_training_protocol(cfg, protocol_path=None):
     return canonical
 
 
+def _load_plan(request, run):
+    if request.treatment_plan_path is None:
+        if request.treatment_plan_sha256 is not None:
+            raise ValueError("Treatment plan checksum requires a plan path")
+        return None
+    path = run.root / request.treatment_plan_path
+    run.relative(path)
+    payload = path.read_bytes()
+    if hashlib.sha256(payload).hexdigest() != request.treatment_plan_sha256:
+        raise ValueError("Treatment plan checksum mismatch")
+    plan = TreatmentPlan.model_validate_json(payload)
+    current = asdict(load_configs()[request.config.dataset_name])
+    if json.dumps(plan.dataset_config, sort_keys=True) != json.dumps(current, sort_keys=True):
+        raise ValueError("Treatment plan dataset rules changed")
+    excluded = sorted({"source_row", "is_synthetic", *request.config.excluded_features})
+    if plan.excluded != excluded or request.config.target in plan.treatments:
+        raise ValueError("Treatment plan exclusions/target differ from the run")
+    if set(plan.treatments) - set(plan.source_columns):
+        raise ValueError("Treatment plan contains unknown columns")
+    log_decision(
+        "training",
+        "treatment_plan",
+        {"sha256": request.treatment_plan_sha256},
+        "VALIDATED",
+        "Checked recipe integrity and dataset rules; refit on training rows only",
+        run=run,
+    )
+    return plan
+
+
+def _raw_features(data, config, plan):
+    if plan is None:
+        return data
+    excluded = set(plan.excluded)
+    if config.name == "bank_marketing" and not config.include_duration:
+        excluded.add("duration")
+    if config.name == "ieee_cis":
+        excluded.update((config.id_column, config.split["time_column"]))
+    return data.drop(columns=list(excluded), errors="ignore")
+
+
+def _cleaner(config, plan, train):
+    if plan is None:
+        return Preprocessor(config, config.imputation, config.include_duration).fit(train)
+    return TreatmentPreprocessor(config, plan.treatments, plan.excluded).fit(train)
+
+
 def _inputs(request, run, protocol_path):
     cfg = request.config
+    plan = _load_plan(request, run)
     if cfg.calibrate or cfg.excluded_features:
         raise ValueError("Calibration or new feature exclusions require a new frozen protocol")
     config = load_configs()[cfg.dataset_name]
@@ -179,10 +265,13 @@ def _inputs(request, run, protocol_path):
     for part, data in raw.items():
         if not data.index.isin(source.index).all():
             raise ValueError(f"{part} has source_row IDs outside the source data")
-        _same_table(data, source.loc[data.index], f"raw {part}")
-    cleaner = Preprocessor(config, config.imputation, config.include_duration).fit(raw["train"])
+        _same_table(data, _raw_features(source.loc[data.index], config, plan), f"raw {part}")
+    # Restore audited source columns for duplicate detection and fold-local fitting.
+    raw = {part: source.loc[data.index].copy() for part, data in raw.items()}
+    fitting = raw["train"].drop_duplicates() if plan is not None else raw["train"]
+    cleaner = _cleaner(config, plan, fitting)
     for part in PARTS:
-        expected = cleaner.clean(raw[part])
+        expected = cleaner.clean(fitting if part == "train" else raw[part])
         # CSV inference can turn string category codes back into numeric values.
         actual = cleaned[part].copy()
         for column in cleaner.discrete:
@@ -193,7 +282,7 @@ def _inputs(request, run, protocol_path):
             )
         _same_table(actual, expected, f"cleaned {part}")
         cleaned[part] = actual
-    return config, raw, cleaned, protocol
+    return config, raw, cleaned, protocol, plan
 
 
 def _synthetic(data, real, target, count):
@@ -228,9 +317,7 @@ def _model_data(table, config, *, original=False, synthetic=None):
     if original and config.name == "bank_marketing" and not config.include_duration:
         data = data.drop(columns="duration", errors="ignore")
     if config.name == "ieee_cis":
-        data = data.drop(
-            columns=[config.id_column, config.split["time_column"]], errors="ignore"
-        )
+        data = data.drop(columns=[config.id_column, config.split["time_column"]], errors="ignore")
     return data.drop(columns=config.target), data[config.target]
 
 
@@ -248,7 +335,11 @@ def _arm_sets(config, raw, cleaned, levels, accepted, seed):
                 train.reset_index(drop=True),
                 config.target,
                 maximum,
-                discrete_columns=config.discrete,
+                discrete_columns=[
+                    c
+                    for c in train
+                    if c in config.discrete or c.endswith(("__missing", "_indicator"))
+                ],
                 seed=seed,
                 k_neighbors=min(5, positives - 1),
             )
@@ -284,7 +375,21 @@ def _prediction_table(table, target, probabilities, threshold):
     )
 
 
-def _fit_record(arm, level, tables, extra, error, name, estimator, seed, config, protocol, folder):
+def _fit_record(
+    arm,
+    level,
+    tables,
+    extra,
+    error,
+    name,
+    estimator,
+    seed,
+    config,
+    protocol,
+    folder,
+    plan=None,
+    raw=None,
+):
     fields = dict(
         arm=arm,
         fill_level=level,
@@ -302,8 +407,10 @@ def _fit_record(arm, level, tables, extra, error, name, estimator, seed, config,
     caught = []
     try:
         original = arm is Arm.RAW
+        if plan is not None and not original:
+            tables = {part: raw[part].loc[frame.index] for part, frame in tables.items()}
         X, y = _model_data(tables["train"], config, original=original, synthetic=extra)
-        estimator = baselines._with_preprocessing(estimator, ArmEncoder(config, original))
+        estimator = baselines._with_preprocessing(estimator, ArmEncoder(config, original, plan))
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
             estimator.fit(X, y)
@@ -385,7 +492,7 @@ def _save_metrics(records, dataset, folder):
     return path, summary_path
 
 
-def _repeated_cv(request, config, raw, protocol, folder, cv_gan_factory):
+def _repeated_cv(request, config, raw, protocol, folder, cv_gan_factory, plan=None):
     """Repeated real-row CV; only threshold-independent PR/ROC AUC are estimated.
 
     The frozen cutoff already used the original validation labels, so reporting
@@ -406,10 +513,12 @@ def _repeated_cv(request, config, raw, protocol, folder, cv_gan_factory):
     for index, (fit_ids, eval_ids) in enumerate(splitter.split(combined, combined[config.target])):
         repeat, fold = divmod(index, cfg.training_cv_folds)
         fold_raw = {"train": combined.iloc[fit_ids], "validation": combined.iloc[eval_ids]}
-        cleaner = Preprocessor(config, config.imputation, config.include_duration).fit(
-            fold_raw["train"]
-        )
-        fold_cleaned = {part: cleaner.clean(data) for part, data in fold_raw.items()}
+        fitting = fold_raw["train"].drop_duplicates() if plan is not None else fold_raw["train"]
+        cleaner = _cleaner(config, plan, fitting)
+        fold_cleaned = {
+            part: cleaner.clean(fitting if part == "train" else data)
+            for part, data in fold_raw.items()
+        }
         for seed in cfg.seeds:
             # Separate reproducible generator randomness from the fixed row partition.
             generation_seed = int(np.random.SeedSequence([seed, repeat, fold]).generate_state(1)[0])
@@ -464,6 +573,11 @@ def _repeated_cv(request, config, raw, protocol, folder, cv_gan_factory):
                         )
                     else:
                         try:
+                            if plan is not None and arm is not Arm.RAW:
+                                tables = {
+                                    part: fold_raw[part].loc[frame.index]
+                                    for part, frame in tables.items()
+                                }
                             X, y = _model_data(
                                 tables["train"], config, original=arm is Arm.RAW, synthetic=extra
                             )
@@ -471,7 +585,7 @@ def _repeated_cv(request, config, raw, protocol, folder, cv_gan_factory):
                                 tables["validation"], config, original=arm is Arm.RAW
                             )
                             fitted = baselines._with_preprocessing(
-                                model, ArmEncoder(config, arm is Arm.RAW)
+                                model, ArmEncoder(config, arm is Arm.RAW, plan)
                             )
                             fitted.fit(X, y)
                             probabilities = fitted.predict_proba(val)[:, 1]
@@ -526,7 +640,7 @@ def run_training(request: TrainingRequest, run: RunDir, *, protocol_path=None, c
             f"thresholds first with `python -m agentic_gan.tools.baselines --dataset "
             f"{cfg.dataset_name} --arm both --cv-folds 3`."
         )
-    config, raw, cleaned, protocol = _inputs(request, run, path)
+    config, raw, cleaned, protocol, plan = _inputs(request, run, path)
     accepted = {}
     train = cleaned["train"]
     positives = int(train[config.target].sum())
@@ -560,6 +674,8 @@ def run_training(request: TrainingRequest, run: RunDir, *, protocol_path=None, c
                         config,
                         protocol,
                         folder,
+                        plan=plan,
+                        raw=raw,
                     )
                     for name, estimator in baselines.build_models(seed).items()
                 ]
@@ -584,7 +700,7 @@ def run_training(request: TrainingRequest, run: RunDir, *, protocol_path=None, c
         cv_paths, cv_result = (None, None), None
         if cfg.training_cv_folds:
             cv_metrics, cv_predictions, cv_result = _repeated_cv(
-                request, config, raw, protocol, folder, cv_gan_factory
+                request, config, raw, protocol, folder, cv_gan_factory, plan
             )
             cv_paths = (cv_metrics, cv_predictions)
     metric_path, summary_path = _save_metrics(records, cfg.dataset_name, folder)

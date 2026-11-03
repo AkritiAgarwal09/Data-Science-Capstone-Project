@@ -127,3 +127,55 @@ def split_data(config: RunConfig, run: RunDir) -> SplitOutput:
         train_positives=int(train_positive.sum()),
         train_negatives=int((~train_positive).sum()),
     )
+
+
+def split_for_training(config: RunConfig, run: RunDir) -> SplitOutput:
+    """Dataset-aware split with stable source IDs and the frozen baseline recipe.
+
+    Retains the source features, including leakage columns, for auditing. The next
+    stage excludes them. IEEE uses the configured time cuts and training sample.
+    """
+    from dataclasses import replace
+
+    from agentic_gan.tools.preprocessing import load_dataset, normalize, split_dataset
+    from agentic_gan.utils.datasets import load_configs
+
+    dataset = load_configs()[config.dataset_name]
+    if config.target != dataset.target:
+        raise SchemaError("Run target differs from the dataset configuration")
+    dataset = replace(
+        dataset,
+        split={
+            **dataset.split,
+            "seed": config.split_seed,
+            "train": config.split_ratios.train,
+            "validation": config.split_ratios.val,
+            "test": config.split_ratios.test,
+        },
+    )
+    data = load_dataset(dataset, config.dataset_path)
+    if "source_row" in data or "is_synthetic" in data:
+        raise SchemaError("Source data contains reserved provenance columns")
+    normalized = normalize(data, dataset, dataset.include_duration)
+    if normalized[config.target].nunique() != 2:
+        raise SchemaError("Source target must contain both classes")
+    ids = split_dataset(data if dataset.name == "ieee_cis" else normalized, dataset)
+    paths, warnings = {}, []
+    for part, rows in ids.items():
+        name = "val" if part == "validation" else part
+        path = run.subdir("data") / f"{name}.csv"
+        data.loc[rows].to_csv(path, index_label="source_row")
+        paths[f"{name}_path"] = path
+        positives = int(normalized.loc[rows, config.target].sum())
+        if positives < WARN_BELOW_POSITIVES:
+            warnings.append(f"{name} has only {positives} positives, so its metrics will be noisy")
+    positives = int(normalized.loc[ids["train"], config.target].sum())
+    return SplitOutput(
+        status=Status.SUCCESS,
+        warnings=warnings,
+        **paths,
+        target=config.target,
+        seed=config.split_seed,
+        train_positives=positives,
+        train_negatives=len(ids["train"]) - positives,
+    )
