@@ -268,7 +268,9 @@ class Preprocessor:
     def fit(self, raw_train: pd.DataFrame):
         if self.config.name == "ieee_cis":
             return self._fit_ieee(raw_train)
-        train = normalize(raw_train, self.config, self.include_duration)
+        train = normalize(raw_train, self.config, self.include_duration).drop(
+            columns=list(getattr(self, "excluded", ())), errors="ignore"
+        )
         self.columns = train.columns.drop(self.config.target).tolist()
         self.discrete = [c for c in self.config.discrete if c in self.columns]
         self.numeric = [c for c in self.columns if c not in self.discrete]
@@ -301,7 +303,9 @@ class Preprocessor:
     def _fit_ieee(self, raw_train):
         if "is_synthetic" in raw_train and not raw_train["is_synthetic"].eq(0).all():
             raise ValueError("Preprocessing must fit on real training rows only")
-        train = normalize(raw_train, self.config)
+        train = normalize(raw_train, self.config).drop(
+            columns=list(getattr(self, "excluded", ())), errors="ignore"
+        )
         if self.config.target not in train or train.empty:
             raise ValueError("Fit requires nonempty labeled training rows")
         features = train.drop(columns=self.config.target)
@@ -781,3 +785,106 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+class TreatmentPreprocessor(Preprocessor):
+    """Apply validated per-column repairs before the existing training-only encoder.
+
+    Forests use numeric predictors only, never labels or excluded columns. A training
+    median/mode remains the deterministic fallback when no predictive fit is possible.
+    """
+
+    def __init__(self, config, treatments, excluded=()):
+        super().__init__(config, config.imputation, config.include_duration)
+        self.treatments = dict(treatments)
+        self.excluded = tuple(excluded)
+
+    def _source(self, raw):
+        return normalize(raw, self.config, self.include_duration).drop(
+            columns=list(self.excluded), errors="ignore"
+        )
+
+    def fit(self, raw_train):
+        from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
+        from sklearn.impute import SimpleImputer
+        from sklearn.pipeline import make_pipeline
+
+        source = self._source(raw_train)
+        self.repairs = {}
+        self.models = {}
+        self.repair_flags = {}
+        for column, action in self.treatments.items():
+            if column not in source or action not in ("median", "mode", "model_missing"):
+                continue
+            values = source[column]
+            categorical = column in self.config.discrete
+            if categorical:
+                mode = values.mode()
+                fill = mode.iloc[0] if len(mode) else MISSING_CATEGORY
+            else:
+                fill = values.median()
+                fill = 0.0 if pd.isna(fill) else float(fill)
+            self.repairs[column] = fill
+            if action != "model_missing":
+                continue
+            flag = f"{column}__missing"
+            if flag in source:
+                raise ValueError(f"Missing-indicator name collision: {flag}")
+            # IEEE already creates its own flags from the original missingness.
+            if self.config.name != "ieee_cis":
+                self.repair_flags[column] = flag
+            predictors = [
+                c for c in source.select_dtypes(include="number")
+                if c not in (column, self.config.target) and source[c].notna().any()
+            ]
+            observed = values.notna()
+            if predictors and observed.sum() >= 2:
+                estimator = RandomForestClassifier if categorical else RandomForestRegressor
+                model = make_pipeline(
+                    SimpleImputer(strategy="median", keep_empty_features=True),
+                    estimator(n_estimators=32, max_depth=8, random_state=42, n_jobs=1),
+                )
+                labels = values.loc[observed].astype(str) if categorical else values.loc[observed]
+                model.fit(source.loc[observed, predictors], labels)
+                self.models[column] = (predictors, model)
+        # Base fit must see original IEEE gaps so its 20% rule and flags stay intact.
+        self._fitting = True
+        try:
+            return super().fit(self._prepare(raw_train, repair=self.config.name != "ieee_cis"))
+        finally:
+            self._fitting = False
+
+    def _prepare(self, raw, *, repair=True):
+        data = raw.copy()
+        source = self._source(raw)
+        for column, flag in self.repair_flags.items():
+            data[flag] = source[column].isna().astype("int8")
+        if repair:
+            for column, fill in self.repairs.items():
+                missing = source[column].isna()
+                values = (
+                    source[column].astype(object)
+                    if column in self.config.discrete else source[column]
+                )
+                values = values.copy()
+                if column in self.models and missing.any():
+                    predictors, model = self.models[column]
+                    values.loc[missing] = model.predict(source.loc[missing, predictors])
+                else:
+                    values = values.fillna(fill)
+                data[column] = values
+        return data
+
+    def clean(self, raw):
+        if getattr(self, "_fitting", False):
+            # Base fit passes prepared rows for encoder fitting.
+            if self.config.name != "ieee_cis":
+                return Preprocessor.clean(self, raw)
+        if self.config.name == "ieee_cis":
+            cleaned = Preprocessor.clean(self, raw)
+            repaired = self._prepare(raw)
+            for column in self.repairs:
+                if column in self.value_columns and column not in self.discrete:
+                    cleaned[column] = repaired[column]
+            return cleaned
+        return Preprocessor.clean(self, self._prepare(raw))

@@ -379,3 +379,23 @@ def test_reference_count_mismatch_stops_before_output(ieee):
     with pytest.raises(ValueError, match="reference split parts"):
         p.run_preprocessing("ieee_cis", root=root, config_path=config_path)
     assert not (root / "data/interim/ieee_cis").exists()
+
+
+def test_ieee_llm_plan_reaches_training_with_fixed_time_sample(ieee, monkeypatch):
+    from test_preprocessing_pipeline import run_dataset_pipeline
+
+    from agentic_gan.agents import preprocessing as agent
+    from agentic_gan.utils import datasets
+
+    config, source, _, _, root = ieee
+    settings = {"ieee_cis": config}
+    monkeypatch.setattr(datasets, "load_configs", lambda: settings)
+    monkeypatch.setattr(agent, "load_configs", lambda: settings)
+    monkeypatch.setattr(training_agent, "load_configs", lambda: settings)
+    output, _ = run_dataset_pipeline(root, monkeypatch, config, source)
+    train = pd.read_csv(output.baseline.train_path)
+    assert len(train) == config.sample["rows"]
+    assert "V1" not in train and "id_01" not in train
+    assert "id_01__missing" in train
+    assert not {"TransactionID", "TransactionDT"} & set(train)
+    assert not train.isna().any().any()

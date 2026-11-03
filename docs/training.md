@@ -3,13 +3,16 @@
 `agents.training.run_training(request, run)` implements the orchestrator's
 `TrainingRequest -> TrainingOutput` handoff after the quality gate. The graph uses
 this callable by default. Other stages can be supplied through `build_graph(agents=...)`;
-the placeholder preprocessing/generator stages do not produce production training inputs.
+the default graph uses real dataset splitting, preprocessing, model selection and quality
+stages, followed by the verified evaluation report (see `docs/evaluation.md`).
 
 ## Inputs and frozen settings
 
 The `raw` and `baseline` `ArmFiles` contain train, validation and test CSVs, **before
 encoding**, with the target and a `source_row` column. Raw tables match `load_dataset`
-output; baseline tables match the shared `Preprocessor` fitted on real training rows.
+output with configured leakage/provenance exclusions when a treatment plan is supplied.
+Baseline tables match the supplied treatment plan fitted on deduplicated real training
+rows; legacy requests without a plan use the shared deterministic `Preprocessor`.
 Bank labels can be `yes`/`no` in raw files and must be 0/1 in cleaned files. Numeric
 category codes are normalized on reading CSVs. `source_row` is never a feature.
 
@@ -72,11 +75,19 @@ so that seed spread does not measure CTGAN training randomness. No accepted sets
 the other three arms still run. Synthetic tables must contain exactly the cleaned
 columns plus `is_synthetic=1`, have the declared count, and have positive-class labels.
 
-`ArmEncoder` learns encoding and scaling from real training rows only, including
-when cloned inside stacking folds. Synthetic rows do not set category vocabularies
-or numeric scaling. Cleaned tables retain the shared training-fitted imputations;
-they are not repaired again using synthetic rows. For repeated outer CV, cleaning
-is relearned from the raw rows inside each outer training fold.
+`TrainingRequest.treatment_plan_path` and `treatment_plan_sha256` carry the preprocessing
+agent's JSON recipe. Training verifies its checksum and dataset settings, and compares
+cleaned tables against a fresh fit of that recipe on the audited raw training rows.
+The plan is logged; no pickle is needed for this validation. Both fields are optional
+for legacy deterministic requests.
+
+With a plan, `ArmEncoder` fits repair models, encoding and scaling on real raw rows,
+including when cloned inside stacking folds. Synthetic rows stay cleaned and do not
+set repair statistics, category vocabularies or numeric scaling. Real holdout rows
+are repaired using that fit's transformer. Repeated outer CV rebuilds cleaned training
+and evaluation tables from the raw fold rows before generating augmentation. The
+chosen treatment actions stay fixed across folds; all learned values are refitted.
+Derived missing flags are included in SMOTENC's discrete columns.
 
 Each `ModelRecord` carries status, hyperparameters, threshold, protocol ID, row
 counts, validation/test metrics, a model artifact, and both prediction paths.

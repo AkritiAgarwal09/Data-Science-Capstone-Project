@@ -48,7 +48,7 @@ def experiment(tmp_path, monkeypatch):
     return make_experiment(tmp_path)
 
 
-def make_experiment(tmp_path, *, cv_folds=3):
+def make_experiment(tmp_path, *, cv_folds=3, missing=False):
     source = tmp_path / "default.csv"
     rng = np.random.default_rng(11)
     pd.DataFrame(
@@ -59,6 +59,10 @@ def make_experiment(tmp_path, *, cv_folds=3):
             "y": [0, 0, 0, 1] * 30,
         }
     ).to_csv(source, index=False)
+    if missing:
+        data = pd.read_csv(source)
+        data.loc[::6, "LIMIT_BAL"] = np.nan
+        data.to_csv(source, index=False)
     cfg = RunConfig(
         dataset_name="default",
         dataset_path=source,
@@ -402,6 +406,17 @@ def test_default_graph_dispatches_to_training_agent(experiment, monkeypatch):
         calls.append(incoming)
         return stub(incoming, run)
 
+    from agentic_gan.agents.preprocessing import preprocess
+    from agentic_gan.llm import FakeLLM
+
+    monkeypatch.setattr(
+        graph, "preprocess", lambda req, run: preprocess(req, run, client=FakeLLM([]))
+    )
+    from agentic_gan.agents.evaluation import run_evaluation
+
+    monkeypatch.setattr(
+        graph, "run_evaluation", lambda req, run: run_evaluation(req, run, client=FakeLLM([]))
+    )
     monkeypatch.setattr(graph, "run_training", capture)
     monkeypatch.setattr(graph, "run_quality", default_agents()[Stage.QUALITY_CHECK])
     state, _ = graph.run_pipeline(
