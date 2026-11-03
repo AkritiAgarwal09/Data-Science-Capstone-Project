@@ -13,6 +13,8 @@ from sklearn.dummy import DummyClassifier
 from sklearn.linear_model import LogisticRegression
 
 from agentic_gan.agents import training as training
+from agentic_gan.llm import FakeLLM, RuleOverrideError
+from agentic_gan.orchestrator.decisions import read_decisions
 from agentic_gan.orchestrator.graph import run_pipeline
 from agentic_gan.orchestrator.manifest import create_run
 from agentic_gan.orchestrator.stubs import default_agents
@@ -526,3 +528,136 @@ def test_orchestrator_passes_only_quality_accepted_levels(experiment):
     assert set(metrics.query("arm == 'ctgan'").fill_level) == {0.25}
     assert set(metrics.query("arm == 'smotenc'").fill_level) == {0.25, 0.5}
     assert run.load_manifest().verify(run) == []
+
+
+# --- LLM run plan -------------------------------------------------------------------------
+
+PROTOCOL = {"protocol_id": "p1", "thresholds": {"A": 0.3}, "models": {"A": {}}}
+SIZES = {
+    "train_rows": 90,
+    "train_positives": 22,
+    "validation_positives": 500,
+    "test_positives": 500,
+}
+
+
+def _quality(tmp_path, passed_by_level):
+    failed = CheckResult(name="worst_column_distance", value=0.2, threshold=0.1, passed=False)
+    ok = CheckResult(name="worst_column_distance", value=0.05, threshold=0.1, passed=True)
+    levels = [
+        LevelReport(fill_level=lv, checks=[ok if p else failed], passed=p)
+        for lv, p in passed_by_level.items()
+    ]
+    return QualityReport(
+        status=Status.SUCCESS,
+        verdict=Verdict.PASS if any(passed_by_level.values()) else Verdict.FAIL,
+        levels=levels,
+        report_path=tmp_path / "quality.json",
+    )
+
+
+def _plan(**changes):
+    plan = {
+        "smote_levels": [0.25],
+        "gan_levels": [0.5],
+        "seeds": [42],
+        "repeated_cv": False,
+        "reason": "Keep the run small",
+    }
+    return {**plan, **changes}
+
+
+def _llm_decisions(run):
+    decisions = read_decisions(run)
+    return decisions[decisions.rule == "llm_step"]
+
+
+@pytest.fixture
+def planning(experiment, tmp_path):
+    request, run, _, _, extras = experiment
+    request = request.updated(accepted_synthetic=extras)  # both levels have a synthetic set
+    quality = _quality(tmp_path, {0.25: False, 0.5: True})
+    return request, run, quality
+
+
+def test_plan_within_the_allowed_values_is_used_and_logged(planning):
+    request, run, quality = planning
+    fake = FakeLLM([_plan()])
+    plan = training.plan_training(request, run, PROTOCOL, SIZES, quality, client=fake)
+    assert plan.gan_levels == [0.5] and plan.seeds == [42] and plan.smote_levels == [0.25]
+    assert len(fake.calls) == 1
+    context = json.loads(fake.calls[0][1])
+    assert context["allowed"]["gan_levels"] == [0.5]
+    assert context["quality"]["levels"][0]["failed_hard_checks"] == ["worst_column_distance"]
+    assert context["small_evaluation_warning"] is None
+    assert _llm_decisions(run).iloc[0].outcome["gan_levels"] == [0.5]
+
+
+def test_plan_that_trains_on_a_failed_level_is_rejected(planning):
+    request, run, quality = planning
+    bad = _plan(gan_levels=[0.25, 0.5])  # 0.25 failed the quality gate
+    fake = FakeLLM([bad, bad])
+    plan = training.plan_training(request, run, PROTOCOL, SIZES, quality, client=fake)
+    assert plan == training.default_plan(request, [0.5])
+    assert len(fake.calls) == 2  # one retry, then the fallback
+    assert _llm_decisions(run).iloc[0].outcome == "LLM_FALLBACK"
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        _plan(seeds=[999]),
+        _plan(smote_levels=[0.75]),
+        _plan(seeds=[]),
+        _plan(gan_levels=[0.5, 0.5]),
+        {**_plan(), "models": ["Logistic"]},
+        {**_plan(), "threshold": 0.9},
+    ],
+)
+def test_invalid_plans_fall_back_to_the_default(planning, bad):
+    request, run, quality = planning
+    plan = training.plan_training(
+        request, run, PROTOCOL, SIZES, quality, client=FakeLLM([bad, bad])
+    )
+    assert plan == training.default_plan(request, [0.5])
+    assert _llm_decisions(run).iloc[0].outcome == "LLM_FALLBACK"
+
+
+def test_llm_error_falls_back_to_the_default(planning):
+    request, run, quality = planning
+    fake = FakeLLM([TimeoutError("timed out"), TimeoutError("timed out")])
+    plan = training.plan_training(request, run, PROTOCOL, SIZES, quality, client=fake)
+    assert plan == training.default_plan(request, [0.5])
+    assert _llm_decisions(run).iloc[0].outcome == "LLM_FALLBACK"
+
+
+def test_without_a_quality_report_every_accepted_level_is_allowed(planning):
+    request, run, _ = planning
+    plan = training.plan_training(
+        request, run, PROTOCOL, SIZES, None, client=FakeLLM([_plan(gan_levels=[0.25, 0.5])])
+    )
+    assert plan.gan_levels == [0.25, 0.5]
+
+
+def test_small_evaluation_set_is_flagged_to_the_llm(planning):
+    request, run, quality = planning
+    fake = FakeLLM([_plan()])
+    sizes = {**SIZES, "test_positives": 30}
+    training.plan_training(request, run, PROTOCOL, sizes, quality, client=fake)
+    warning = json.loads(fake.calls[0][1])["small_evaluation_warning"]
+    assert "test" in warning and "validation" not in warning
+
+
+def test_changed_rules_during_planning_are_rejected(planning):
+    request, run, quality = planning
+
+    class EditsTheConfig(FakeLLM):
+        def complete(self, system_prompt, context, output_model):
+            run.config_path.write_text(run.config_path.read_text().replace("- 43", "- 99", 1))
+            return super().complete(system_prompt, context, output_model)
+
+    with pytest.raises(RuleOverrideError):
+        training.plan_training(
+            request, run, PROTOCOL, SIZES, quality, client=EditsTheConfig([_plan()])
+        )
+    assert _llm_decisions(run).iloc[0].outcome == "RULE_OVERRIDE_REJECTED"
