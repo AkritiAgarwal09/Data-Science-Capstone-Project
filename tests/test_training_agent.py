@@ -1,6 +1,7 @@
 """Training handoffs, frozen settings, provenance, and fold-local evaluation."""
 
 import json
+import os
 import shutil
 from dataclasses import asdict
 
@@ -783,3 +784,13 @@ def test_run_without_a_quality_report_writes_the_template_summary(planning):
     assert not fake.calls
     text = (run.subdir("models") / "run_summary.md").read_text()
     assert text.startswith("default: ") and "Test PR-AUC" in text
+
+
+@pytest.mark.live
+@pytest.mark.skipif(not os.environ.get("RUN_LIVE_LLM"), reason="set RUN_LIVE_LLM=1 to call Vertex")
+def test_live_vertex_plan_stays_within_the_allowed_values(planning):
+    request, run, quality = planning
+    plan = training.plan_training(request, run, PROTOCOL, SIZES, quality)  # real Vertex client
+    assert set(plan.gan_levels) <= {0.5}  # 0.25 failed the quality gate
+    assert set(plan.seeds) <= {42, 43}
+    assert _llm_decisions(run).iloc[0].outcome != "LLM_FALLBACK"

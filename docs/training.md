@@ -156,3 +156,50 @@ Tests in `tests/test_training_agent.py` cover all arm/level/seed combinations,
 frozen thresholds, serialization and manifest registration, provenance rejection,
 failure propagation, deterministic reruns, fold-local generation, a real four-model
 smoke run, and the orchestrator's filtering of quality-rejected fill levels.
+
+## LLM run plan and summary
+
+`run_training` can plan the run and summarize it with an LLM (issue #80), built on the
+shared runtime in [llm_agents.md](llm_agents.md). The models, frozen thresholds and
+metrics stay in code. The LLM never fits, scores or chooses a model.
+
+It runs when the run has a quality report: pass `quality=` to `run_training`, or let it read
+the newest `quality/quality_report_attempt_*.json` in the run folder (the quality agent writes
+it, so the graph needs no change). Without a report there is no LLM call: the default plan
+runs and the summary is a template, both logged.
+
+**The plan.** `plan_training` sends the LLM the quality report (which levels passed and which
+hard checks failed), the dataset sizes and any small-evaluation-set warning (fewer than 100
+positives in validation or test). It returns a `TrainingPlan`:
+
+| Field | Allowed values |
+|---|---|
+| `smote_levels` | levels in the config's fill-level grid (may be empty) |
+| `gan_levels` | only levels with an accepted synthetic set that **passed** the quality gate (may be empty) |
+| `seeds` | seeds from the config, at least one |
+| `repeated_cv` | yes or no; it cannot be switched off if the config asks for CV |
+| `reason` | one line, up to 300 characters |
+
+The original and cleaned arms always run. A plan with a value outside these (a failed level,
+an unknown seed, a repeat, an extra field such as a new threshold) is retried once and then
+replaced by the default plan: every allowed level, the configured seeds and CV setting. That
+fallback is logged as `LLM_FALLBACK`. The plan used is saved as `models/training_plan.json`.
+
+**The summary.** After training, `models/run_summary.md` holds a short summary written from the
+result table: mean test PR-AUC and F1 of each seed's validation winner for each arm and fill
+level, the plan, the failure count and the warning. Every number in the LLM's text must appear
+in that table, or the text is rejected, retried once and replaced by a template written from
+the same table (logged as `LLM_FALLBACK`). Test scores are descriptive and never choose
+anything.
+
+**Locked rules.** Before and after each LLM call the agent hashes the run config and the frozen
+protocol (thresholds, models). If either changed, the call raises `RuleOverrideError` and the
+decision is logged as `RULE_OVERRIDE_REJECTED`. Every LLM answer, fallback and rejection is in
+`decisions.jsonl`.
+
+Tests use the fake LLM (`FakeLLM`) and no network. One live test calls Vertex and is skipped
+unless you opt in; set up Vertex access as in [llm_agents.md](llm_agents.md), then:
+
+```bash
+RUN_LIVE_LLM=1 uv run pytest -m live
+```
