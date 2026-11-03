@@ -661,3 +661,84 @@ def test_changed_rules_during_planning_are_rejected(planning):
             request, run, PROTOCOL, SIZES, quality, client=EditsTheConfig([_plan()])
         )
     assert _llm_decisions(run).iloc[0].outcome == "RULE_OVERRIDE_REJECTED"
+
+
+def test_configured_repeated_cv_cannot_be_dropped_by_the_plan(planning):
+    request, run, quality = planning
+    request = request.updated(config=request.config.updated(training_cv_folds=3))
+    run.config_path.write_text(request.config.to_yaml())
+    bad = _plan(repeated_cv=False)
+    plan = training.plan_training(
+        request, run, PROTOCOL, SIZES, quality, client=FakeLLM([bad, bad])
+    )
+    assert plan.repeated_cv is True  # the fallback keeps the configured CV
+    assert _llm_decisions(run).iloc[0].outcome == "LLM_FALLBACK"
+
+
+def _run_with_plan(request, run, quality, answers):
+    fake = FakeLLM(answers)
+    result = training.run_training(request, run, quality=quality, client=fake)
+    return result, fake, pd.read_csv(result.metrics_path)
+
+
+def test_run_trains_only_what_the_plan_allows(planning):
+    request, run, quality = planning
+    result, fake, metrics = _run_with_plan(request, run, quality, [_plan()])
+    assert result.status is Status.SUCCESS
+    assert len(fake.calls) == 1
+    assert set(metrics.seed) == {42}
+    assert set(metrics.query("arm == 'smotenc'").fill_level) == {0.25}
+    assert set(metrics.query("arm == 'ctgan'").fill_level) == {0.5}
+    assert {"original", "cleaned"} <= set(metrics.arm)
+    saved = json.loads((run.subdir("models") / "training_plan.json").read_text())
+    assert saved["gan_levels"] == [0.5] and saved["seeds"] == [42]
+
+
+def test_run_never_trains_ctgan_on_a_failed_level(planning):
+    request, run, quality = planning
+    bad = _plan(gan_levels=[0.25, 0.5])  # 0.25 failed the gate
+    result, _, metrics = _run_with_plan(request, run, quality, [bad, bad])
+    assert result.status is Status.SUCCESS
+    assert set(metrics.query("arm == 'ctgan'").fill_level) == {0.5}
+    assert _llm_decisions(run).iloc[0].outcome == "LLM_FALLBACK"
+
+
+def test_plan_without_synthetic_arms_still_runs_the_real_arms(planning):
+    request, run, quality = planning
+    plan = _plan(smote_levels=[], gan_levels=[])
+    _, _, metrics = _run_with_plan(request, run, quality, [plan])
+    assert set(metrics.arm) == {"original", "cleaned"}
+
+
+def test_run_without_a_quality_report_makes_no_llm_call(planning):
+    request, run, _ = planning
+    fake = FakeLLM([])  # any call would fail
+    result = training.run_training(request, run, client=fake)
+    assert result.status is Status.SUCCESS and not fake.calls
+    metrics = pd.read_csv(result.metrics_path)
+    assert set(metrics.query("arm == 'ctgan'").fill_level) == {0.25, 0.5}
+    decisions = read_decisions(run)
+    assert (decisions.outcome.astype(str).str.contains("seeds")).any()
+
+
+def test_run_reads_the_quality_agents_saved_report(planning):
+    request, run, quality = planning
+    folder = run.subdir("quality")
+    for attempt in (1, 2):  # the newest report is used
+        report = quality if attempt == 2 else _quality(folder, {0.25: True, 0.5: True})
+        (folder / f"quality_report_attempt_{attempt}.json").write_text(report.model_dump_json())
+    fake = FakeLLM([_plan()])
+    result = training.run_training(request, run, client=fake)
+    metrics = pd.read_csv(result.metrics_path)
+    assert len(fake.calls) == 1
+    assert json.loads(fake.calls[0][1])["allowed"]["gan_levels"] == [0.5]
+    assert set(metrics.query("arm == 'ctgan'").fill_level) == {0.5}
+
+
+def test_frozen_thresholds_are_the_same_whatever_the_plan(planning):
+    request, run, quality = planning
+    result, _, metrics = _run_with_plan(request, run, quality, [_plan()])
+    protocol = json.loads(result.protocol_path.read_text())
+    used = metrics.dropna(subset=["threshold"]).groupby("model").threshold.unique()
+    assert all(len(values) == 1 for values in used)
+    assert {m: v[0] for m, v in used.items()} == pytest.approx(protocol["thresholds"])
