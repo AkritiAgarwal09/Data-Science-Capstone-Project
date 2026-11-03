@@ -675,8 +675,11 @@ def test_configured_repeated_cv_cannot_be_dropped_by_the_plan(planning):
     assert _llm_decisions(run).iloc[0].outcome == "LLM_FALLBACK"
 
 
+SUMMARY = {"summary": "Run finished; the results table has the scores."}
+
+
 def _run_with_plan(request, run, quality, answers):
-    fake = FakeLLM(answers)
+    fake = FakeLLM([*answers, SUMMARY])
     result = training.run_training(request, run, quality=quality, client=fake)
     return result, fake, pd.read_csv(result.metrics_path)
 
@@ -685,7 +688,7 @@ def test_run_trains_only_what_the_plan_allows(planning):
     request, run, quality = planning
     result, fake, metrics = _run_with_plan(request, run, quality, [_plan()])
     assert result.status is Status.SUCCESS
-    assert len(fake.calls) == 1
+    assert len(fake.calls) == 2  # the plan, then the summary
     assert set(metrics.seed) == {42}
     assert set(metrics.query("arm == 'smotenc'").fill_level) == {0.25}
     assert set(metrics.query("arm == 'ctgan'").fill_level) == {0.5}
@@ -727,10 +730,10 @@ def test_run_reads_the_quality_agents_saved_report(planning):
     for attempt in (1, 2):  # the newest report is used
         report = quality if attempt == 2 else _quality(folder, {0.25: True, 0.5: True})
         (folder / f"quality_report_attempt_{attempt}.json").write_text(report.model_dump_json())
-    fake = FakeLLM([_plan()])
+    fake = FakeLLM([_plan(), SUMMARY])
     result = training.run_training(request, run, client=fake)
     metrics = pd.read_csv(result.metrics_path)
-    assert len(fake.calls) == 1
+    assert len(fake.calls) == 2
     assert json.loads(fake.calls[0][1])["allowed"]["gan_levels"] == [0.5]
     assert set(metrics.query("arm == 'ctgan'").fill_level) == {0.5}
 
@@ -742,3 +745,41 @@ def test_frozen_thresholds_are_the_same_whatever_the_plan(planning):
     used = metrics.dropna(subset=["threshold"]).groupby("model").threshold.unique()
     assert all(len(values) == 1 for values in used)
     assert {m: v[0] for m, v in used.items()} == pytest.approx(protocol["thresholds"])
+
+
+def test_llm_summary_is_written_from_the_results(planning):
+    request, run, quality = planning
+    text = "The cleaned arm scored best on test PR-AUC."
+    fake = FakeLLM([_plan(), {"summary": text}])
+    training.run_training(request, run, quality=quality, client=fake)
+    assert (run.subdir("models") / "run_summary.md").read_text().strip() == text
+    facts = json.loads(fake.calls[1][1])
+    assert {row["arm"] for row in facts["test_scores"]} >= {"original", "cleaned", "ctgan"}
+    assert all(len(row["test_pr_auc"]) == 5 for row in facts["test_scores"])  # e.g. "0.512"
+
+
+def test_summary_with_an_invented_number_is_replaced_by_the_template(planning):
+    request, run, quality = planning
+    invented = {"summary": "The CTGAN arm reached a PR-AUC of 0.987 on test."}
+    fake = FakeLLM([_plan(), invented, invented])
+    training.run_training(request, run, quality=quality, client=fake)
+    text = (run.subdir("models") / "run_summary.md").read_text()
+    assert "0.987" not in text and text.startswith("default: ")
+    assert _llm_decisions(run).iloc[1].outcome == "LLM_FALLBACK"
+
+
+def test_summary_falls_back_when_the_llm_fails(planning):
+    request, run, quality = planning
+    fake = FakeLLM([_plan(), TimeoutError("timed out"), TimeoutError("timed out")])
+    training.run_training(request, run, quality=quality, client=fake)
+    assert (run.subdir("models") / "run_summary.md").read_text().startswith("default: ")
+    assert _llm_decisions(run).iloc[1].outcome == "LLM_FALLBACK"
+
+
+def test_run_without_a_quality_report_writes_the_template_summary(planning):
+    request, run, _ = planning
+    fake = FakeLLM([])
+    training.run_training(request, run, client=fake)
+    assert not fake.calls
+    text = (run.subdir("models") / "run_summary.md").read_text()
+    assert text.startswith("default: ") and "Test PR-AUC" in text
