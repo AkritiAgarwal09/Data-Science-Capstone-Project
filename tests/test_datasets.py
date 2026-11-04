@@ -43,6 +43,20 @@ def test_ieee_cis_tables_and_keys():
     }
 
 
+def test_ieee_cis_ctgan_settings_fit_the_cpu_time_limit():
+    ctgan = IEEE.ctgan
+    assert ctgan["train_on"] == "minority_rows"  # the full 100,000 rows take about 15 hours
+    assert ctgan["batch_size"] % ctgan["pac"] == 0
+    # ~0.93 s per step on CPU (eda/ctgan_ieee/time_trial.py) plus about 2 minutes of set-up
+    minority = IEEE.sample["rows"] * 0.0338
+    steps = ctgan["epochs"] * (minority // ctgan["batch_size"]) * ctgan["discriminator_steps"]
+    assert steps * 0.93 / 60 + 2 <= ctgan["max_minutes"]
+
+
+def test_other_datasets_have_no_ctgan_overrides():
+    assert all(DATASETS[name].ctgan is None for name in DATASETS if name != "ieee_cis")
+
+
 def test_ieee_cis_data_stays_under_folders_git_ignores():
     assert IEEE.file.startswith("data/external/")
     assert IEEE.merge["file"].startswith("data/external/")

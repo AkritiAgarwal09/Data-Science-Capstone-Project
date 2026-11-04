@@ -162,6 +162,14 @@
       "seed": 42,
       "max_missing": 0.2
     },
+    "ctgan": {
+      "train_on": "minority_rows",
+      "epochs": 300,
+      "batch_size": 500,
+      "pac": 10,
+      "discriminator_steps": 1,
+      "max_minutes": 60
+    },
     "imputation": "median",
     "include_duration": false
   }
