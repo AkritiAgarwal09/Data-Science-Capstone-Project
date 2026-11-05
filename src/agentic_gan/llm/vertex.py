@@ -8,6 +8,9 @@ from google.auth.transport.requests import Request
 from openai import OpenAI
 from pydantic import BaseModel
 
+# A stalled call must not hold up a run for the OpenAI client's default of ten minutes.
+DEFAULT_TIMEOUT_SECONDS = 90
+
 
 class VertexClient:
     def __init__(self):
@@ -34,6 +37,7 @@ class VertexClient:
             ),
             api_key=self.credentials.token,
             max_retries=0,
+            timeout=float(os.environ.get("VERTEX_TIMEOUT_SECONDS", DEFAULT_TIMEOUT_SECONDS)),
         ) as client:
             response = client.chat.completions.create(
                 model=self.model,
