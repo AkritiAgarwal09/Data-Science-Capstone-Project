@@ -1,4 +1,4 @@
 dataset,seeds,model_fits,seconds
-bank_marketing,5,160,205.5
-default,5,100,90.3
-polish,5,100,176.8
+bank_marketing,5,160,156.6
+default,5,160,116.5
+polish,5,160,238.2
