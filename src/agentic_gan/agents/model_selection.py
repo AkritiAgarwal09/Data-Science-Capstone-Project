@@ -2,21 +2,28 @@
 
 from __future__ import annotations
 
+import hashlib
+import inspect
+import json
 from collections.abc import Sequence
 
 import pandas as pd
+from pydantic import Field
 
 from agentic_gan.orchestrator.decisions import log_decision
 from agentic_gan.orchestrator.manifest import RunDir
 from agentic_gan.schemas import (
     GeneratorOutput,
     ModelSelectionInput,
+    RunConfig,
+    Schema,
     Status,
     SyntheticSet,
     fill_rows,
 )
 from agentic_gan.tools.quality_privacy import PRIVACY_CHECKS
 from agentic_gan.tools.selection import (
+    STEP_ORDER,
     ColumnSpec,
     DataCharacteristics,
     SelectionResult,
@@ -34,9 +41,65 @@ CTGAN_DEFAULTS = {
     "pac": 10,
     "discriminator_steps": 1,
 }
+# The CTGAN settings a retry may move, each inside its gan_bounds range.
+SETTING_NAMES = ("epochs", "pac", "discriminator_steps", "batch_size")
 FIDELITY_TOKENS = ("column_distance", "correlation", "ks", "js", "fidelity")
 # A constant cohort is the horizon id, not a ratio the generator should learn.
 HORIZON_LABEL = "cohort"
+
+EXPLAIN_PROMPT = (
+    "You explain, in plain language for a data scientist, why a fixed rule chose, or declined to "
+    "choose, a synthetic-data generator for a tabular dataset. Use only the decision steps and "
+    "routes_not_chosen in the context; each step lists its rule, inputs, outcome and rationale. "
+    "Quote the specific numbers from those steps (row counts, limits, column counts). Set "
+    "`generator` to exactly the value of `generator` in the context ('none' when no generator was "
+    "chosen). You never choose, change or recommend a different generator, and you never change a "
+    "rule, threshold or gate. Keep the explanation under 150 words."
+)
+
+RETRY_PROMPT = (
+    "A CTGAN generator failed a synthetic-data quality gate. Propose the CTGAN settings for the "
+    "next attempt: epochs, pac, discriminator_steps and batch_size. Use only the failed checks, "
+    "the quality diagnosis and the current settings in the context. Every value must lie inside "
+    "the inclusive range given for that setting in `limits`; a setting whose range has equal low "
+    "and high cannot change, so return its current value. batch_size must be divisible by pac. If "
+    "`privacy_failed` is true the generator may be copying real rows, so do not raise epochs. "
+    "Explain in `reason` which failed checks or columns your changes target. You never change a "
+    "rule, threshold, range or the choice of generator."
+)
+
+
+class SelectionExplanation(Schema):
+    """The LLM's account of the rule's outcome. `generator` must echo the rule, never pick."""
+
+    generator: str  # exactly the rule's generator, or "none"
+    explanation: str = Field(min_length=1)
+
+
+class RetrySettings(Schema):
+    """CTGAN settings the LLM proposes for a retry; each is checked against gan_bounds."""
+
+    epochs: int
+    pac: int
+    discriminator_steps: int
+    batch_size: int
+    reason: str = Field(min_length=1)
+
+
+def _rule_hash(config: RunConfig) -> str:
+    """Fingerprint of what the LLM steps must not change."""
+    params = inspect.signature(select_generator).parameters
+    locked = {
+        "min_rows": config.min_rows,
+        "gan_bounds": config.gan_bounds,
+        "step_order": STEP_ORDER,
+        "ctgan_defaults": CTGAN_DEFAULTS,
+        "epoch_step": EPOCH_STEP,
+        "privacy_checks": sorted(PRIVACY_CHECKS),
+        "minority_min": params["minority_min"].default,
+        "min_steps": params["min_steps"].default,
+    }
+    return hashlib.sha256(json.dumps(locked, sort_keys=True).encode()).hexdigest()
 
 
 def measure_training_frame(

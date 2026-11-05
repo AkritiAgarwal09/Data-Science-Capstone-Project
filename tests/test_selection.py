@@ -4,8 +4,14 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
+from pydantic import ValidationError
 
-from agentic_gan.agents.model_selection import run_model_selection
+from agentic_gan.agents.model_selection import (
+    RetrySettings,
+    SelectionExplanation,
+    _rule_hash,
+    run_model_selection,
+)
 from agentic_gan.orchestrator.decisions import read_decisions
 from agentic_gan.orchestrator.manifest import create_run
 from agentic_gan.schemas import (
@@ -612,3 +618,45 @@ def _logged(run, rule):
     matched = read_decisions(run).query("rule == @rule")
     assert len(matched) >= 1
     return matched.outcome.iloc[-1]
+
+
+# --- LLM step scaffolding: output models and the locked rule hash -----------------------------
+
+
+def test_rule_hash_is_stable_for_equal_configs_and_moves_with_the_locked_fields(tmp_path):
+    base = _config(tmp_path, gan_bounds={"epochs": (100, 600)})
+    same = _config(tmp_path, gan_bounds={"epochs": (100, 600)})
+    assert _rule_hash(base) == _rule_hash(same)
+    assert _rule_hash(base) != _rule_hash(_config(tmp_path, min_rows=2500,
+                                                  gan_bounds={"epochs": (100, 600)}))
+    assert _rule_hash(base) != _rule_hash(_config(tmp_path, gan_bounds={"epochs": (100, 700)}))
+    assert _rule_hash(base) != _rule_hash(_config(tmp_path, gan_bounds={"pac": (5, 10),
+                                                                        "epochs": (100, 600)}))
+
+
+def test_rule_hash_survives_the_config_yaml_round_trip(tmp_path):
+    config = _config(tmp_path, min_rows=1500, gan_bounds={"epochs": (100, 600), "pac": (5, 10)})
+    run = create_run(config, run_id="hash", runs_dir=tmp_path / "runs")
+    assert _rule_hash(run.load_config()) == _rule_hash(config)
+
+
+def test_selection_explanation_rejects_unknown_fields_and_empty_text():
+    SelectionExplanation(generator="ctgan", explanation="Mixed column types, so CTGAN.")
+    with pytest.raises(ValidationError):
+        SelectionExplanation(generator="ctgan", explanation="")
+    with pytest.raises(ValidationError):
+        SelectionExplanation(generator="ctgan", explanation="ok", rule="type_routing")
+    with pytest.raises(ValidationError):
+        SelectionExplanation(explanation="no generator given")
+
+
+def test_retry_settings_reject_unknown_fields_and_an_empty_reason():
+    RetrySettings(epochs=400, pac=10, discriminator_steps=1, batch_size=500, reason="more epochs")
+    with pytest.raises(ValidationError):
+        RetrySettings(epochs=400, pac=10, discriminator_steps=1, batch_size=500, reason="")
+    with pytest.raises(ValidationError):
+        RetrySettings(
+            epochs=400, pac=10, discriminator_steps=1, batch_size=500, reason="ok", seed=1
+        )
+    with pytest.raises(ValidationError):
+        RetrySettings(epochs=400, pac=10, discriminator_steps=1, reason="missing batch_size")
