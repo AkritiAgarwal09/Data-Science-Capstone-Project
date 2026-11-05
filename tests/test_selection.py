@@ -411,15 +411,17 @@ def _reads(monkeypatch):
     return seen
 
 
-def _fail_report(*names):
+def _fail_report(*names, diagnosis=None):
     checks = [
         CheckResult(name=name, value=1.0, threshold=0.1, passed=False) for name in names
     ]
+    assert all(check.hard for check in checks)
     return QualityReport(
         status=Status.SUCCESS,
         verdict=Verdict.FAIL,
         levels=[LevelReport(fill_level=0.25, passed=False, checks=checks)],
         report_path=Path("quality.json"),
+        diagnosis=diagnosis,
     )
 
 
@@ -822,10 +824,11 @@ PROPOSAL = {"epochs": 500, "pac": 10, "discriminator_steps": 1, "batch_size": 50
             "reason": "more training"}
 
 
-def _retry_request(tmp_path, gan_bounds, *failed):
+def _retry_request(tmp_path, gan_bounds, *failed, diagnosis=None, run_id="sel"):
     config = _config(tmp_path, gan_bounds=gan_bounds)
     return _request(
-        tmp_path, config, _bank_frame(), 500, 1500, attempt=2, previous=_fail_report(*failed),
+        tmp_path, config, _bank_frame(), 500, 1500, attempt=2,
+        previous=_fail_report(*failed, diagnosis=diagnosis), run_id=run_id,
     )
 
 
@@ -949,6 +952,209 @@ def test_unsupported_adjustments_are_reported_once_and_not_applied(tmp_path, gan
     # It comes before the retry line, and more_epochs produced no such line.
     assert unsupported.index[0] < _retry_lines(run).index[0]
     assert gan.trains[0][1]["epochs"] == 500
+
+
+# --- Retry proposer: full FakeLLM contract ------------------------------------------------------
+
+ANSWER = {
+    "epochs": 400,
+    "pac": 10,
+    "discriminator_steps": 1,
+    "batch_size": 500,
+    "reason": "more training",
+}
+
+
+def _answer(**overrides):
+    return {**ANSWER, **overrides}
+
+
+def _trained(gan):
+    return gan.trains[-1][1]
+
+
+def test_fail_report_builds_hard_checks_and_can_carry_a_diagnosis():
+    assert CheckResult.model_fields["hard"].default is True
+    diagnosis = QualityDiagnosis(
+        failed_checks=["column_distance"],
+        columns=["age"],
+        likely_cause="Undertrained.",
+        adjustments=["more_epochs"],
+    )
+    report = _fail_report("column_distance", "exact_train_copies", diagnosis=diagnosis)
+    assert all(check.hard for check in report.levels[0].checks)
+    assert report.diagnosis is diagnosis
+
+
+def test_a_proposal_inside_the_bounds_is_used_and_logged_from_the_llm(tmp_path, gan):
+    fake = FakeLLM([_answer(epochs=500)])
+    request, run, _path = _retry_request(tmp_path, {"epochs": (100, 600)}, "column_distance")
+    run_model_selection(request, run, client=fake)
+    assert len(fake.calls) == 1
+    assert _trained(gan)["epochs"] == 500
+    line = _retry_lines(run).iloc[0]
+    assert len(_retry_lines(run)) == 1
+    assert line.rule == "hyperparameter_retry"
+    assert line.inputs["source"] == "llm"
+
+
+def test_a_proposal_outside_the_bounds_is_rejected(tmp_path, gan):
+    # The issue's required out-of-bounds case: the runtime rejects it, the rule's 400 is used.
+    bad = _answer(epochs=900)
+    fake = FakeLLM([bad, bad])
+    request, run, _path = _retry_request(tmp_path, {"epochs": (100, 600)}, "column_distance")
+    run_model_selection(request, run, client=fake)
+    assert len(fake.calls) == 2
+    assert _logged(run, "llm_step") == "LLM_FALLBACK"
+    assert _trained(gan)["epochs"] == 400
+    assert _retry_lines(run).iloc[0].inputs["source"] == "rule"
+
+
+def test_changing_an_unbounded_setting_is_rejected(tmp_path, gan):
+    moved_pac = _answer(pac=5)
+    fake = FakeLLM([moved_pac, moved_pac])
+    request, run, _path = _retry_request(tmp_path, {"epochs": (100, 600)}, "column_distance")
+    run_model_selection(request, run, client=fake)
+    assert len(fake.calls) == 2
+    assert _logged(run, "llm_step") == "LLM_FALLBACK"
+    assert _trained(gan)["pac"] == 10
+    assert _trained(gan)["epochs"] == 400
+    assert _retry_lines(run).iloc[0].inputs["source"] == "rule"
+
+
+def test_a_non_divisible_batch_snaps_down_when_the_multiple_is_in_range(tmp_path, gan):
+    # 500 // 8 * 8 = 496, which sits inside (480, 520).
+    fake = FakeLLM([_answer(pac=8, batch_size=500)])
+    request, run, _path = _retry_request(
+        tmp_path,
+        {"epochs": (100, 600), "pac": (5, 12), "batch_size": (480, 520)},
+        "column_distance",
+    )
+    run_model_selection(request, run, client=fake)
+    assert len(fake.calls) == 1
+    assert _trained(gan)["pac"] == 8
+    assert _trained(gan)["batch_size"] == 496
+    assert _retry_lines(run).iloc[0].inputs["source"] == "llm"
+
+
+def test_a_non_divisible_batch_snaps_up_when_the_round_down_is_below_the_bound(tmp_path, gan):
+    # 496 is below 500, so the next multiple 504 is used.
+    fake = FakeLLM([_answer(pac=8, batch_size=500)])
+    request, run, _path = _retry_request(
+        tmp_path,
+        {"epochs": (100, 600), "pac": (5, 12), "batch_size": (500, 520)},
+        "column_distance",
+    )
+    run_model_selection(request, run, client=fake)
+    assert len(fake.calls) == 1
+    assert _trained(gan)["batch_size"] == 504
+    assert _retry_lines(run).iloc[0].inputs["source"] == "llm"
+
+
+def test_an_impossible_batch_snap_is_rejected_and_logged(tmp_path, gan):
+    # 496 < 500 and 504 > 503: no legal multiple inside the batch_size range.
+    fake = FakeLLM([_answer(pac=8, batch_size=500)])
+    request, run, _path = _retry_request(
+        tmp_path,
+        {"epochs": (100, 600), "pac": (5, 12), "batch_size": (500, 503)},
+        "column_distance",
+    )
+    run_model_selection(request, run, client=fake)
+    assert len(fake.calls) == 1
+    assert _logged(run, "retry_rejected") == "REJECTED"
+    assert _trained(gan)["pac"] == 10
+    assert _trained(gan)["batch_size"] == 500
+    assert _trained(gan)["epochs"] == 400
+    assert _retry_lines(run).iloc[0].inputs["source"] == "rule"
+
+
+@pytest.mark.parametrize("check", ["dcr_ratio", "exact_train_copies"])
+def test_a_privacy_failure_rejects_raising_epochs(tmp_path, gan, check):
+    raised = _answer(epochs=500)
+    fake = FakeLLM([raised, raised])
+    request, run, _path = _retry_request(
+        tmp_path, {"epochs": (100, 600)}, "column_distance", check,
+    )
+    run_model_selection(request, run, client=fake)
+    assert len(fake.calls) == 2
+    assert _logged(run, "llm_step") == "LLM_FALLBACK"
+    assert _trained(gan)["epochs"] == 300
+    assert _retry_lines(run).iloc[0].inputs["source"] == "rule"
+
+
+@pytest.mark.parametrize("check", ["dcr_ratio", "exact_train_copies"])
+def test_a_privacy_failure_accepts_lowering_epochs(tmp_path, gan, check):
+    fake = FakeLLM([_answer(epochs=200, reason="shorter training after copies")])
+    request, run, _path = _retry_request(
+        tmp_path, {"epochs": (100, 600)}, "column_distance", check,
+    )
+    run_model_selection(request, run, client=fake)
+    assert len(fake.calls) == 1
+    assert _trained(gan)["epochs"] == 200
+    assert _retry_lines(run).iloc[0].inputs["source"] == "llm"
+
+
+def test_empty_gan_bounds_make_no_llm_call_and_keep_the_defaults(tmp_path, gan):
+    fake = FakeLLM([])
+    request, run, _path = _retry_request(tmp_path, {}, "column_distance")
+    run_model_selection(request, run, client=fake)
+    assert len(fake.calls) == 0
+    assert {name: _trained(gan)[name] for name in CTGAN_DEFAULTS} == CTGAN_DEFAULTS
+    line = _retry_lines(run).iloc[0]
+    assert len(_retry_lines(run)) == 1
+    assert line.rule == "retry_unchanged"
+
+
+def test_attempt_1_explains_and_attempt_2_proposes(tmp_path, gan):
+    first_llm = FakeLLM([EXPLAIN_ANSWER])
+    first, run, _path = _request(
+        tmp_path, _config(tmp_path), _bank_frame(), 500, 1500, run_id="explain",
+    )
+    run_model_selection(first, run, client=first_llm)
+    assert len(first_llm.calls) == 1
+    assert first_llm.calls[0][2] is SelectionExplanation
+
+    second_llm = FakeLLM([_answer(epochs=500)])
+    second, retry_run, _path = _retry_request(
+        tmp_path, {"epochs": (100, 600)}, "column_distance",
+    )
+    run_model_selection(second, retry_run, client=second_llm)
+    assert len(second_llm.calls) == 1
+    assert second_llm.calls[0][2] is RetrySettings
+
+
+def test_change_sampling_is_the_unsupported_adjustment_that_gets_logged(tmp_path, gan):
+    diagnosis = QualityDiagnosis(
+        failed_checks=["column_distance"],
+        columns=["job"],
+        likely_cause="Job categories are off.",
+        adjustments=["more_epochs", "change_sampling"],
+    )
+    fake = FakeLLM([_answer(epochs=500)])
+    request, run, _path = _retry_request(
+        tmp_path, {"epochs": (100, 600)}, "column_distance", diagnosis=diagnosis,
+    )
+    run_model_selection(request, run, client=fake)
+    assert len(fake.calls) == 1
+    unsupported = read_decisions(run).query("rule == 'unsupported_adjustment'")
+    assert len(unsupported) == 1
+    assert unsupported.iloc[0].inputs["adjustment"] == "change_sampling"
+
+
+def test_attempt_2_writes_exactly_one_retry_line(tmp_path, gan):
+    changed, run, _path = _retry_request(
+        tmp_path, {"epochs": (100, 600)}, "column_distance", run_id="changed",
+    )
+    run_model_selection(changed, run, client=FakeLLM([_answer(epochs=500)]))
+    lines = _retry_lines(run)
+    assert len(lines) == 1
+    assert lines.iloc[0].rule == "hyperparameter_retry"
+
+    unchanged, other, _path = _retry_request(tmp_path, {}, "column_distance", run_id="unchanged")
+    run_model_selection(unchanged, other, client=FakeLLM([]))
+    idle = _retry_lines(other)
+    assert len(idle) == 1
+    assert idle.iloc[0].rule == "retry_unchanged"
 
 
 # --- Unchosen routes: why TimeGAN / WGAN-GP / CTGAN lost ---------------------------------------
