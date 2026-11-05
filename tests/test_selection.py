@@ -581,6 +581,10 @@ def test_exact_train_copies_does_not_add_epochs(tmp_path, gan):
     assert _logged(run, "retry_unchanged") == "UNCHANGED"
 
 
+def test_privacy_check_names_are_pinned():
+    assert PRIVACY_CHECKS == {"exact_train_copies", "synthetic_duplicates", "dcr_ratio"}
+
+
 @pytest.mark.parametrize("check", sorted(PRIVACY_CHECKS))
 def test_every_privacy_check_name_blocks_more_epochs(tmp_path, gan, check):
     config = _config(tmp_path, gan_bounds={"epochs": (100, 600)})
