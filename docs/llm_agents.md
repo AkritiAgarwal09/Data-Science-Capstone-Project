@@ -31,6 +31,11 @@ the allowed set, and values outside bounds trigger one retry, then the fixed fal
 A changed rule hash raises `RuleOverrideError` and is logged; it never becomes an
 accepted answer.
 
+Agents take `client=None` and pass it to `run_llm_step`. Tests inject a `FakeLLM`
+through that argument, or through `functools.partial` when the agent is wired into a
+graph run. The pipeline's `llm=` argument only reaches the run narrative; it is not
+handed to the stage agents.
+
 Mark a test that calls the real model with `@pytest.mark.live` and skip it unless
 `RUN_LIVE_LLM=1`. Run live tests with `RUN_LIVE_LLM=1 uv run pytest -m live` once the
 Vertex setup below works. Use at most one per agent.
