@@ -2,6 +2,7 @@
 
 import json
 import os
+from functools import partial
 from pathlib import Path
 
 import pandas as pd
@@ -9,6 +10,7 @@ import pytest
 from pydantic import ValidationError
 from test_quality_agent import V1_ANSWER, V1_DRIVERS
 
+import agentic_gan.orchestrator.graph as graph_module
 from agentic_gan.agents.model_selection import (
     CTGAN_DEFAULTS,
     SETTING_NAMES,
@@ -23,6 +25,7 @@ from agentic_gan.agents.model_selection import (
 from agentic_gan.llm import FakeLLM, RuleOverrideError
 from agentic_gan.orchestrator.decisions import read_decisions
 from agentic_gan.orchestrator.manifest import create_run
+from agentic_gan.orchestrator.stubs import default_agents
 from agentic_gan.schemas import (
     ArmFiles,
     CheckResult,
@@ -32,6 +35,7 @@ from agentic_gan.schemas import (
     QualityDiagnosis,
     QualityReport,
     RunConfig,
+    Stage,
     Status,
     Verdict,
     fill_rows,
@@ -1401,3 +1405,48 @@ def test_live_gemini_explains_the_rule_and_proposes_a_legal_retry(tmp_path, gan)
         assert low <= settings[name] <= high
     assert settings["batch_size"] % settings["pac"] == 0
     assert retried.generator == "ctgan"
+
+
+def test_model_selection_in_the_graph_uses_the_fake_explanation(tmp_path, gan):
+    frame = _bank_frame()
+    positives, negatives = 500, 1500
+
+    def preprocess(request, run):
+        data = run.subdir("data")
+        train_path = data / "baseline_train.csv"
+        frame.to_csv(train_path, index=False)
+        unread = data / "unread.csv"
+        unread.write_text("not-a-training-table\n")
+        files = ArmFiles(
+            train_path=train_path.resolve(),
+            val_path=unread.resolve(),
+            test_path=unread.resolve(),
+        )
+        dummy = run.subdir("profile") / "dummy.json"
+        dummy.write_text("{}\n")
+        return PreprocessOutput(
+            status=Status.SUCCESS,
+            raw=files,
+            baseline=files,
+            profile_path=dummy.resolve(),
+            treatment_log_path=dummy.resolve(),
+            transformer_path=dummy.resolve(),
+            transformer_fit_rows=len(frame),
+            baseline_train_positives=positives,
+            baseline_train_negatives=negatives,
+        )
+
+    fake = FakeLLM([EXPLAIN_ANSWER])
+    agents = default_agents()
+    agents[Stage.PREPROCESSING] = preprocess
+    agents[Stage.MODEL_SELECTION] = partial(run_model_selection, client=fake)
+    state, run = graph_module.run_pipeline(
+        _config(tmp_path), runs_dir=tmp_path / "runs", agents=agents
+    )
+    assert state.is_complete
+    assert state.attempts(Stage.MODEL_SELECTION) == 1
+    assert len(fake.calls) == 1
+    assert fake.calls[0][2] is SelectionExplanation
+    steps = read_decisions(run).query("rule == 'llm_step' and agent == 'model_selection'")
+    assert steps.outcome.iloc[0] == EXPLAIN_ANSWER
+    assert gan.trains
