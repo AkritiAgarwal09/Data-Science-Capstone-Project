@@ -1,6 +1,7 @@
 """Quality-agent reports, its pass, retry, and exhaustion routes, and the LLM diagnosis."""
 
 import json
+import os
 from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
@@ -158,8 +159,9 @@ def test_quality_agent_in_graph(tmp_path, monkeypatch, scenario, attempts, avail
     agents[Stage.PREPROCESSING] = PreprocessFixture()
     generator = GeneratorFixture()
     agents[Stage.MODEL_SELECTION] = generator
+    llm = FakeLLM([FIXTURE_DIAGNOSIS] * 3)
     # Explicit fixtures keep this routing test independent of the real split/repair stages.
-    agents[Stage.QUALITY_CHECK] = quality_module.run_quality
+    agents[Stage.QUALITY_CHECK] = partial(quality_module.run_quality, client=llm)
     state, run = graph_module.run_pipeline(
         _config(tmp_path), runs_dir=tmp_path / "runs", agents=agents
     )
@@ -383,8 +385,9 @@ def test_a_diagnosis_needs_failed_checks_a_cause_and_an_adjustment(change):
 
 
 @pytest.mark.live
+@pytest.mark.skipif(not os.environ.get("RUN_LIVE_LLM"), reason="set RUN_LIVE_LLM=1 to call Vertex")
 def test_live_gemini_diagnoses_the_v1_failure(v1):
-    """One real Vertex call; deselected by default, run it with `uv run pytest -m live`."""
+    """One real Vertex call; run with RUN_LIVE_LLM=1 and -m live."""
     request, run = v1
     report = quality_module.run_quality(request, run)
 
