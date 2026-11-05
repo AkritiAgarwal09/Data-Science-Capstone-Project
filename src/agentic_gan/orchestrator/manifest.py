@@ -211,7 +211,8 @@ def create_run(
     state = RunState.new(run_id)  # rejects an unsafe run id before anything is created
     dataset_sha256 = sha256_file(config.dataset_path)  # a run needs its raw file to be rebuilt
 
-    root = Path(runs_dir) / run_id
+    # Stage outputs use run.subdir(); absolute roots prevent prefixing runs/ twice.
+    root = (Path(runs_dir) / run_id).resolve()
     try:
         root.mkdir(parents=True)
     except FileExistsError:

@@ -1,4 +1,4 @@
-"""Dataset-independent binary baselines, using Raghav's model settings and PR-AUC."""
+"""Four frozen binary baselines with validation-selected, shared arm thresholds."""
 
 import argparse
 import hashlib
@@ -27,16 +27,16 @@ from sklearn.metrics import (
     roc_auc_score,
 )
 from sklearn.model_selection import StratifiedKFold, cross_validate
-from sklearn.neural_network import MLPClassifier
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
-from sklearn.tree import DecisionTreeClassifier
 from threadpoolctl import threadpool_limits
 
 from agentic_gan.tools.preprocessing import Preprocessor, load_dataset, normalize, split_dataset
 from agentic_gan.utils.datasets import load_configs
+from agentic_gan.utils.files import sha256_file
 
-METRICS = ("pr_auc", "roc_auc", "f1", "precision", "recall", "accuracy")
+METRICS = ("pr_auc", "f1", "roc_auc", "precision", "recall", "accuracy")
+SUITE_VERSION = "sprint2-four-models-v3"
 
 
 RESULT_COLUMNS = [
@@ -47,12 +47,17 @@ RESULT_COLUMNS = [
     "cv_folds",
     "status",
     "selected",
+    "protocol_id",
+    "threshold",
+    "threshold_source",
     "cv_pr_auc_mean",
     "cv_pr_auc_sd",
     "val_pr_auc",
+    "val_f1",
+    "val_f1_at_0_5",
     "test_pr_auc",
-    "test_roc_auc",
     "test_f1",
+    "test_roc_auc",
     "test_precision",
     "test_recall",
     "test_accuracy",
@@ -60,17 +65,19 @@ RESULT_COLUMNS = [
 
 
 def build_models(seed=42):
-    """Original eight unchanged; ninth model is an MLP with training-only early stopping."""
+    """Fixed suite; keep original settings, including the stack's three base learners."""
     from catboost import CatBoostClassifier
     from lightgbm import LGBMClassifier
-    from xgboost import XGBClassifier
 
     models = {
-        "Logistic regression": LogisticRegression(max_iter=1000, random_state=seed),
-        "Decision tree": DecisionTreeClassifier(random_state=seed),
-        "Random forest": RandomForestClassifier(n_estimators=100, n_jobs=2, random_state=seed),
-        "Gradient boosting": GradientBoostingClassifier(random_state=seed),
-        "XGBoost": XGBClassifier(n_estimators=150, n_jobs=2, random_state=seed),
+        # Shallow, stochastic trees bound exact split-search cost on IEEE-CIS.
+        "Gradient boosting": GradientBoostingClassifier(
+            n_estimators=50,
+            max_depth=2,
+            max_features="sqrt",
+            subsample=0.2,
+            random_state=seed,
+        ),
         "LightGBM": LGBMClassifier(n_estimators=150, verbosity=-1, n_jobs=2, random_state=seed),
         "CatBoost": CatBoostClassifier(
             iterations=200, thread_count=2, verbose=0, random_seed=seed, allow_writing_files=False
@@ -78,22 +85,15 @@ def build_models(seed=42):
     }
     models["Stacking ensemble"] = StackingClassifier(
         estimators=[
-            ("logistic", clone(models["Logistic regression"])),
-            ("forest", clone(models["Random forest"])),
-            ("lightgbm", clone(models["LightGBM"])),
+            ("logistic", LogisticRegression(max_iter=100, tol=0.05, random_state=seed)),
+            ("forest", RandomForestClassifier(
+                n_estimators=10, max_depth=6, n_jobs=1, random_state=seed
+            )),
         ],
-        final_estimator=LogisticRegression(max_iter=1000, random_state=seed),
+        final_estimator=LogisticRegression(max_iter=100, tol=0.05, random_state=seed),
         stack_method="predict_proba",
-        cv=3,
+        cv=2,
         n_jobs=1,
-    )
-    models["Neural net"] = MLPClassifier(
-        hidden_layer_sizes=(100,),
-        max_iter=300,
-        early_stopping=True,
-        validation_fraction=0.1,
-        n_iter_no_change=10,
-        random_state=seed,
     )
     return models
 
@@ -104,15 +104,40 @@ def pr_auc_score(y, probabilities):
     return float(auc(recall, precision))
 
 
-def metric_row(y, probabilities):
-    probabilities = np.asarray(probabilities)
-    if not np.isfinite(probabilities).all():
-        raise ValueError("Non-finite predicted probabilities")
-    prediction = (probabilities >= 0.5).astype(int)
+def _probabilities(y, probabilities):
+    probabilities = np.asarray(probabilities, dtype=float)
+    if probabilities.ndim != 1 or len(probabilities) != len(y) or not len(y):
+        raise ValueError("Expected one probability per label")
+    if not np.isfinite(probabilities).all() or ((probabilities < 0) | (probabilities > 1)).any():
+        raise ValueError("Probabilities must be finite and between zero and one")
+    if np.asarray(y).ndim != 1 or set(np.unique(y)) != {0, 1}:
+        raise ValueError("Threshold/metric labels must contain both binary classes")
+    return probabilities
+
+
+def select_f1_threshold(y_validation, probabilities):
+    """Maximize validation F1 over observed scores; ties choose the highest cutoff."""
+    probabilities = _probabilities(y_validation, probabilities)
+    precision, recall, thresholds = precision_recall_curve(y_validation, probabilities)
+    denominator = precision[:-1] + recall[:-1]
+    f1 = np.divide(
+        2 * precision[:-1] * recall[:-1],
+        denominator,
+        out=np.zeros_like(denominator),
+        where=denominator != 0,
+    )
+    return float(thresholds[np.flatnonzero(f1 == f1.max())[-1]])
+
+
+def metric_row(y, probabilities, *, threshold):
+    probabilities = _probabilities(y, probabilities)
+    if not np.isfinite(threshold) or not 0 <= threshold <= 1:
+        raise ValueError("Threshold must be finite and between zero and one")
+    prediction = (probabilities >= threshold).astype(int)
     return {
         "pr_auc": pr_auc_score(y, probabilities),
-        "roc_auc": float(roc_auc_score(y, probabilities)),
         "f1": float(f1_score(y, prediction, zero_division=0)),
+        "roc_auc": float(roc_auc_score(y, probabilities)),
         "precision": float(precision_score(y, prediction, zero_division=0)),
         "recall": float(recall_score(y, prediction, zero_division=0)),
         "accuracy": float(accuracy_score(y, prediction)),
@@ -175,11 +200,10 @@ def run_models(
     *,
     preprocessor=None,
     cv_folds=3,
+    thresholds=None,
     model_names=None,
 ) -> pd.DataFrame:
     """Return one row per model; select on validation PR-AUC, test only the winner.
-
-    ``model_names`` optionally restricts the run to those keys of ``build_models``.
 
     Six positional inputs may be encoded arrays/DataFrames. For raw data, pass
     an unfitted sklearn-compatible preprocessor, cloned inside each CV fold.
@@ -190,23 +214,26 @@ def run_models(
     Stacking base models each own their preprocessing, including inside inner folds.
     Test metric cells are empty for models not selected. Failures and convergence
     warnings are recorded; failed models cannot win. No estimator is fitted on test.
+    With thresholds=None, calibrate on validation (original reference arm only).
+    All comparison arms must pass the reference's frozen model-to-threshold map.
+    Training CV reports only threshold-independent PR-AUC and ROC-AUC.
     """
     _check_inputs(X_train, y_train, X_val, y_val, X_test, y_test, preprocessor, cv_folds)
     models = build_models(seed)
     if model_names is not None:
+        if not model_names or len(set(model_names)) != len(model_names):
+            raise ValueError("Choose at least one model, without duplicates")
         unknown = sorted(set(model_names) - set(models))
         if unknown:
             raise ValueError(f"Unknown models: {unknown}")
         models = {name: models[name] for name in model_names}
+    if thresholds is not None:
+        _validate_thresholds(thresholds, models)
     rows, fitted = [], {}
     cv = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=seed) if cv_folds else None
     scoring = {
         "pr_auc": _pr_scorer,
         "roc_auc": "roc_auc",
-        "f1": "f1",
-        "accuracy": "accuracy",
-        "precision": "precision",
-        "recall": "recall",
     }
     with threadpool_limits(limits=2):
         for name, estimator in models.items():
@@ -218,6 +245,12 @@ def run_models(
                 "status": "success",
                 "selected": False,
                 "error": "",
+                "threshold": thresholds[name] if thresholds is not None else np.nan,
+                "threshold_source": (
+                    "frozen_original_validation_f1"
+                    if thresholds is not None
+                    else "original_validation_f1"
+                ),
                 **{f"test_{m}": np.nan for m in METRICS},
             }
             model = _with_preprocessing(estimator, preprocessor)
@@ -234,14 +267,20 @@ def run_models(
                             n_jobs=1,
                             error_score="raise",
                         )
-                        for metric in METRICS:
+                        for metric in scoring:
                             row[f"cv_{metric}_mean"] = float(scores[f"test_{metric}"].mean())
                             row[f"cv_{metric}_sd"] = float(scores[f"test_{metric}"].std(ddof=1))
                     model.fit(X_train, y_train)
+                    probabilities = model.predict_proba(X_val)[:, 1]
+                    if thresholds is None:
+                        row["threshold"] = select_f1_threshold(y_val, probabilities)
+                    row["val_f1_at_0_5"] = metric_row(y_val, probabilities, threshold=0.5)["f1"]
                     row.update(
                         {
                             f"val_{k}": v
-                            for k, v in metric_row(y_val, model.predict_proba(X_val)[:, 1]).items()
+                            for k, v in metric_row(
+                                y_val, probabilities, threshold=row["threshold"]
+                            ).items()
                         }
                     )
                     fitted[name] = model
@@ -264,7 +303,9 @@ def run_models(
             {
                 f"test_{k}": v
                 for k, v in metric_row(
-                    y_test, fitted[winner["model"]].predict_proba(X_test)[:, 1]
+                    y_test,
+                    fitted[winner["model"]].predict_proba(X_test)[:, 1],
+                    threshold=winner["threshold"],
                 ).items()
             }
         )
@@ -273,6 +314,90 @@ def run_models(
         .sort_values("val_pr_auc", ascending=False, kind="stable", na_position="last")
         .reset_index(drop=True)
     )
+
+
+def _validate_thresholds(thresholds, models):
+    if set(thresholds) != set(models):
+        raise ValueError("Frozen thresholds must contain exactly the fixed model suite")
+    if any(not np.isfinite(v) or not 0 <= v <= 1 for v in thresholds.values()):
+        raise ValueError("Frozen thresholds must be finite and between zero and one")
+
+
+def _digest(value):
+    return hashlib.sha256(json.dumps(value, sort_keys=True, default=str).encode()).hexdigest()
+
+
+def _model_settings(seed):
+    return json.loads(
+        json.dumps(
+            {name: model.get_params(deep=True) for name, model in build_models(seed).items()},
+            sort_keys=True,
+            default=str,
+        )
+    )
+
+
+def _label_hash(y):
+    # Labels and order must match even when callers supply already-encoded features.
+    return _digest(np.asarray(y, dtype=int).tolist())
+
+
+def freeze_protocol(path, table, metadata, *, dataset, seed, cv_folds, y_val, y_test):
+    """Write a new immutable reference protocol only after every model succeeds."""
+    if (table.status != "success").any():
+        raise ValueError("Cannot freeze an incomplete model suite")
+    thresholds = dict(zip(table.model, table.threshold, strict=True))
+    _validate_thresholds(thresholds, build_models(seed))
+    protocol = {
+        "suite_version": SUITE_VERSION,
+        "dataset": dataset,
+        "seed": seed,
+        "cv_folds": cv_folds,
+        "reference_arm": "original",
+        "objective": "maximize validation F1; highest threshold breaks exact ties; p >= t",
+        "thresholds": thresholds,
+        "models": _model_settings(seed),
+        "validation_labels_sha256": _label_hash(y_val),
+        "test_labels_sha256": _label_hash(y_test),
+        **{key: metadata[key] for key in ("source_sha256", "split_hashes", "config", "versions")},
+    }
+    protocol["protocol_id"] = _digest(protocol)
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("x") as stream:
+        json.dump(protocol, stream, indent=2)
+    return protocol
+
+
+def load_protocol(path, *, seed=42, cv_folds=3, metadata=None, y_val=None, y_test=None):
+    """Refuse settings/data drift; never silently recalibrate an existing experiment."""
+    protocol = json.loads(Path(path).read_text())
+    payload = {k: v for k, v in protocol.items() if k != "protocol_id"}
+    if protocol.get("protocol_id") != _digest(payload):
+        raise ValueError("Frozen protocol checksum mismatch")
+    expected = {
+        "suite_version": SUITE_VERSION,
+        "seed": seed,
+        "cv_folds": cv_folds,
+        "models": _model_settings(seed),
+        "versions": _versions(),
+    }
+    if metadata is not None:
+        expected.update({k: metadata[k] for k in ("source_sha256", "split_hashes", "config")})
+    for key, value in expected.items():
+        if _digest(protocol.get(key)) != _digest(value):
+            raise ValueError(f"Frozen protocol mismatch: {key}; create a separate experiment")
+    for split, y in (("validation", y_val), ("test", y_test)):
+        if y is not None and protocol[f"{split}_labels_sha256"] != _label_hash(y):
+            raise ValueError(f"Frozen {split} labels/order do not match")
+    _validate_thresholds(protocol["thresholds"], build_models(seed))
+    return protocol
+
+
+def _versions():
+    return {
+        p: version(p) for p in ("numpy", "pandas", "scikit-learn", "scipy", "lightgbm", "catboost")
+    }
 
 
 class SharedPreprocessor(TransformerMixin, BaseEstimator):
@@ -293,7 +418,7 @@ class SharedPreprocessor(TransformerMixin, BaseEstimator):
         return self.fitted_.transform(X).to_numpy()
 
 
-def _minimal_transformer(X, discrete, strategy="median"):
+def _minimal_transformer(X, discrete, strategy="median", *, sparse_output=False):
     categorical = [c for c in X if c in discrete or not pd.api.types.is_numeric_dtype(X[c])]
     numeric = [c for c in X if c not in categorical]
     return ColumnTransformer(
@@ -309,11 +434,12 @@ def _minimal_transformer(X, discrete, strategy="median"):
                 "categorical",
                 make_pipeline(
                     SimpleImputer(strategy="most_frequent", keep_empty_features=True),
-                    OneHotEncoder(handle_unknown="ignore", sparse_output=False),
+                    OneHotEncoder(handle_unknown="ignore", sparse_output=sparse_output),
                 ),
                 categorical,
             ),
-        ]
+        ],
+        sparse_threshold=1.0 if sparse_output else 0.3,
     )
 
 
@@ -324,19 +450,22 @@ def prepare_inputs(dataset, arm, root, seed, config_path=None):
     config = load_configs(config_path)[dataset]
     config = replace(config, split={**config.split, "seed": seed})
     raw = load_dataset(config, root / config.file)
-    data = raw.copy()
-    data[config.target] = normalize(raw, config, config.include_duration)[config.target]
+    # Normalize IEEE features before model fitting: this removes the transaction key
+    # and split clock while retaining the raw table for the configured time split.
+    data = normalize(raw, config, config.include_duration)
+    split_source = raw if config.name == "ieee_cis" else data
     if arm == "cleaned":
         transformer = SharedPreprocessor(config)
     else:
-        if dataset == "bank_marketing" and not config.include_duration:
-            data = data.drop(columns="duration")
         transformer = _minimal_transformer(
-            data.drop(columns=config.target), config.discrete, config.imputation
+            data.drop(columns=config.target),
+            config.discrete,
+            config.imputation,
+            sparse_output=config.name == "ieee_cis",
         )
-    ids = split_dataset(data, config)
+    ids = split_dataset(split_source, config)
     frames = [data.loc[ids[name]] for name in ("train", "validation", "test")]
-    source_hash = hashlib.sha256((root / config.file).read_bytes()).hexdigest()
+    source_hash = source_hash_for(config, root / config.file)
     inputs = tuple(
         item
         for frame in frames
@@ -352,13 +481,25 @@ def prepare_inputs(dataset, arm, root, seed, config_path=None):
         "split_hashes": {
             s: hashlib.sha256(json.dumps(v).encode()).hexdigest() for s, v in ids.items()
         },
-        "versions": {
-            p: version(p)
-            for p in ("numpy", "pandas", "scikit-learn", "scipy", "xgboost", "lightgbm", "catboost")
-        },
+        "versions": _versions(),
         "python": platform.python_version(),
     }
     return inputs, transformer, metadata
+
+
+def source_hash_for(config, source_path):
+    """Hash every source file that defines a dataset, including IEEE identity rows."""
+    source_path = Path(source_path)
+    if config.name != "ieee_cis":
+        return sha256_file(source_path)
+    identity_path = source_path.parent / Path(config.merge["file"]).name
+    if not identity_path.is_file():
+        raise FileNotFoundError(f"IEEE-CIS identity table not found: {identity_path}")
+    digest = hashlib.sha256()
+    for label, path in (("transaction", source_path), ("identity", identity_path)):
+        digest.update(label.encode("utf-8"))
+        digest.update(bytes.fromhex(sha256_file(path)))
+    return digest.hexdigest()
 
 
 def save_results(table, path):
@@ -384,11 +525,41 @@ def run_dataset(dataset, *, root=None, arm="cleaned", seed=42, cv_folds=3, confi
         "stacking base pipelines also refit preprocessing inside inner folds. "
         "Final fitting uses training rows only; validation/test are transform-only."
     )
-    table = run_models(*inputs, seed=seed, preprocessor=transformer, cv_folds=cv_folds)
+    protocol_path = root / "results" / f"baseline_protocol_{dataset}_{seed}_cv{cv_folds}.json"
+    protocol = None
+    if protocol_path.exists():
+        protocol = load_protocol(
+            protocol_path,
+            seed=seed,
+            cv_folds=cv_folds,
+            metadata=metadata,
+            y_val=inputs[3],
+            y_test=inputs[5],
+        )
+    elif arm != "original":
+        raise ValueError("Run --arm original or --arm both first to freeze validation thresholds")
+    table = run_models(
+        *inputs,
+        seed=seed,
+        preprocessor=transformer,
+        cv_folds=cv_folds,
+        thresholds=protocol["thresholds"] if protocol else None,
+    )
+    if protocol is None:
+        protocol = freeze_protocol(
+            protocol_path,
+            table,
+            metadata,
+            dataset=dataset,
+            seed=seed,
+            cv_folds=cv_folds,
+            y_val=inputs[3],
+            y_test=inputs[5],
+        )
+    table["protocol_id"] = protocol["protocol_id"]
     for key, value in [
         ("dataset", dataset),
         ("arm", arm),
-        ("threshold", 0.5),
         ("pr_auc_method", "trapezoidal"),
         ("include_duration", metadata["include_duration"]),
         ("source_sha256", metadata["source_sha256"]),
@@ -405,8 +576,12 @@ def run_dataset(dataset, *, root=None, arm="cleaned", seed=42, cv_folds=3, confi
         seed=seed,
         cv_folds=cv_folds,
         results=json.loads(table.to_json(orient="records")),
-        models={name: model.get_params(deep=False) for name, model in build_models(seed).items()},
-        selection="highest validation trapezoidal PR-AUC; threshold 0.5; test winner only",
+        models=_model_settings(seed),
+        protocol_id=protocol["protocol_id"],
+        selection=(
+            "highest validation trapezoidal PR-AUC; "
+            "frozen original-validation F1 thresholds; test winner only"
+        ),
     )
     (result_path.parent / f"{dataset}_{arm}_{seed}_cv{cv_folds}.json").write_text(
         json.dumps(metadata, indent=2, default=str)

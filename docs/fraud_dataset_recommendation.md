@@ -127,13 +127,13 @@ Things worth knowing:
 
 ### Adding IEEE-CIS
 
-**Status.** The mentor confirmed IEEE-CIS as the main fraud dataset on 22 October. The settings below are the `ieee_cis` entry in `src/agentic_gan/utils/datasets.json`. They were measured with `eda/fraud/ieee_cis_split.py` on the files downloaded on 16 October. The preprocessing script does not read the entry yet: the join, the duplicate rule and the time split are the IEEE-CIS preprocessing issue.
+**Status.** The mentor confirmed IEEE-CIS as the main fraud dataset on 22 October. The settings below are the `ieee_cis` entry in `src/agentic_gan/utils/datasets.json`. They were measured with `eda/fraud/ieee_cis_split.py` on the files downloaded on 16 October. The shared preprocessing tool now reads the settings, merges transaction and identity tables, applies the duplicate rule and time split, and writes the outputs described in `docs/preprocessing.md`.
 
 **Why.** It has 20,663 fraud rows, so a generator has thousands of real positives to learn from, unlike ULB. Its features are masked raw columns, not PCA components. Its fraud rate is steady over time (3.38%, 3.90% and 3.44% across the time split below). It has real missing values, so it is a second testbed for the data-repair step.
 
 | Setting | Value |
 |---|---|
-| Files | `data/external/ieee-fraud-detection/train_transaction.csv` and `train_identity.csv`. Each person downloads their own copy; git ignores the folder |
+| Files | `data/external/train_transaction.csv` and `train_identity.csv`. Each person downloads their own copy; git ignores the folder |
 | Join | identity left-joined onto transactions, one to one, on `TransactionID`: 590,540 rows and 434 columns (394 transaction, 40 identity) |
 | Target and key | `isFraud`; `TransactionID` is the row key and never a feature |
 | Discrete columns | 49, the categorical columns named on the competition's data page: `ProductCD`, `card1` to `card6`, `addr1`, `addr2`, `P_emaildomain`, `R_emaildomain`, `M1` to `M9`, `DeviceType`, `DeviceInfo`, `id_12` to `id_38` |

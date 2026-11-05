@@ -32,6 +32,16 @@ def _file(run: RunDir, folder: str, name: str, content: str = "stub\n") -> Path:
     return path.resolve()
 
 
+def _stub_table(target: str, positive_class: str | int) -> str:
+    if isinstance(positive_class, str):
+        positive = positive_class
+        negative = "no" if positive_class.lower() == "yes" else "yes"
+    else:
+        positive = str(positive_class)
+        negative = "0" if positive_class != 0 else "1"
+    return f"feature,{target}\n1,{positive}\n0,{negative}\n"
+
+
 class StubAgent:
     """failures=0 succeeds; positive counts fail first N calls; -1 fails forever."""
 
@@ -52,19 +62,25 @@ class StubAgent:
             raise RuntimeError(f"stub {self.stage.value} failed on call {self.calls}")
 
         if self.stage is Stage.SPLIT:
-            paths = {part: _file(run, "data", f"{part}.csv", "feature,y\n1,yes\n0,no\n")
-                     for part in ("train", "val", "test")}
+            paths = {
+                part: _file(
+                    run, "data", f"{part}.csv",
+                    _stub_table(request.target, request.positive_class),
+                )
+                for part in ("train", "val", "test")
+            }
             output = SplitOutput(status=Status.SUCCESS, train_path=paths["train"],
                                  val_path=paths["val"], test_path=paths["test"],
                                  target=request.target, seed=request.split_seed,
                                  train_positives=1, train_negatives=1)
         elif self.stage is Stage.PREPROCESSING:
+            table = _stub_table(request.config.target, request.config.positive_class)
             raw = ArmFiles(**{
-                f"{part}_path": _file(run, "data", f"raw_{part}.csv", "feature,y\n1,yes\n")
+                f"{part}_path": _file(run, "data", f"raw_{part}.csv", table)
                 for part in ("train", "val", "test")
             })
             baseline = ArmFiles(**{
-                f"{part}_path": _file(run, "data", f"baseline_{part}.csv", "feature,y\n1,yes\n")
+                f"{part}_path": _file(run, "data", f"baseline_{part}.csv", table)
                 for part in ("train", "val", "test")
             })
             output = PreprocessOutput(

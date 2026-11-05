@@ -12,13 +12,18 @@ Every run is in `eda/ctgan_bank/artifacts/ctgan_runs.csv`.
 |---|---|---|---|
 | Mean column distance | 0.106 | 0.042 | 0.05 |
 | Worst column distance | 0.274 (`job`) | 0.117 (`balance`) | 0.10 |
-| Spearman difference | 0.066 | 0.045 | 0.045 |
+| Spearman difference | 0.066 | 0.0451 | 0.045 |
 | Technician share of subscribers | 42% | 14.5% | 15.3% real |
-| Real-vs-synthetic AUC | 0.864 | 0.735 | about 0.47 (real vs real) |
+| Real-vs-synthetic AUC (seed 42) | 0.864 | 0.735 | about 0.52 (real vs real) |
 
-Limits are 2x the real-vs-real noise floor (`suggest_thresholds`). v2 passes the mean and
-Spearman checks, fails the worst-column check on `balance`, and a classifier can still tell the
-rows from real ones (AUC 0.735, down from 0.864).
+Limits are 2x the real-vs-real noise floor (`suggest_thresholds`). v2 passes the mean check,
+fails the worst-column check on `balance`, and is borderline on Spearman (0.039 and 0.043 at the
+10% and 25% fills, 0.0451 at 50%, just over the limit). A classifier can still tell the rows
+from real ones (AUC 0.735, down from 0.864).
+
+Gate check (the 15 hard checks of the quality gate, suggested limits, seed 42): v1 fails 6 of 15
+at the 25% fill, v2 fails 3 of 15 at 25% (worst column, and the PR-AUC and best-F1 gain checks,
+-0.011 and -0.003) and 4 of 15 at 50% (the same three plus Spearman).
 
 ## What helped
 

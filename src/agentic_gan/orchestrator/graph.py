@@ -6,8 +6,11 @@ from uuid import uuid4
 
 from langgraph.graph import END, START, StateGraph
 
+from agentic_gan.agents.evaluation import run_evaluation
 from agentic_gan.agents.model_selection import run_model_selection
+from agentic_gan.agents.preprocessing import preprocess
 from agentic_gan.agents.quality import run_quality
+from agentic_gan.agents.training import run_training
 from agentic_gan.schemas import (
     STAGE_IO,
     EvaluationInput,
@@ -29,6 +32,7 @@ from agentic_gan.utils.datasets import DATASETS
 
 from .decisions import log_decision
 from .manifest import Manifest, RunDir, create_run
+from .split import split_for_training
 from .state import RunState
 from .stubs import StubAgent, default_agents
 
@@ -60,8 +64,12 @@ def build_graph(agents=None):
     """Compile the visible stage graph; agents accept (typed request, RunDir)."""
     if agents is None:
         agents = default_agents()
+        agents[Stage.SPLIT] = split_for_training
+        agents[Stage.PREPROCESSING] = preprocess
         agents[Stage.QUALITY_CHECK] = run_quality
-        # A caller-supplied fixture, including the quality-agent graph test, is left in place.
+        agents[Stage.TRAINING] = run_training
+        agents[Stage.EVALUATION] = run_evaluation
+        # Default to the real selector while preserving explicitly supplied test agents.
         if isinstance(agents[Stage.MODEL_SELECTION], StubAgent):
             agents[Stage.MODEL_SELECTION] = run_model_selection
     if set(agents) != set(Stage):
@@ -165,6 +173,8 @@ def build_graph(agents=None):
         return execute(Stage.TRAINING, TrainingRequest(
             config=state["config"], raw=state["preprocessing"].raw,
             baseline=state["preprocessing"].baseline, accepted_synthetic=accepted,
+            treatment_plan_path=state["preprocessing"].treatment_plan_path,
+            treatment_plan_sha256=state["preprocessing"].treatment_plan_sha256,
         ), state)
 
     def evaluation(state):

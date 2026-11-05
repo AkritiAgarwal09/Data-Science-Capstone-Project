@@ -35,9 +35,9 @@ def test_entries_without_extra_settings_keep_their_defaults(tmp_path):
 def test_ieee_cis_tables_and_keys():
     assert IEEE.target == "isFraud"
     assert IEEE.id_column == "TransactionID"
-    assert IEEE.file == "data/external/ieee-fraud-detection/train_transaction.csv"
+    assert IEEE.file == "data/external/train_transaction.csv"
     assert IEEE.merge == {
-        "file": "data/external/ieee-fraud-detection/train_identity.csv",
+        "file": "data/external/train_identity.csv",
         "on": "TransactionID",
         "how": "left",
     }

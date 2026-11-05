@@ -11,7 +11,7 @@ hash matches, is the manifest's job (orchestrator/manifest.py).
 from enum import StrEnum
 from itertools import pairwise
 from pathlib import Path
-from typing import Annotated, Any, ClassVar, Self
+from typing import Annotated, Any, ClassVar, Literal, Self
 
 import yaml
 from pydantic import (
@@ -130,16 +130,25 @@ class RunConfig(Schema):
     gan_bounds: dict[str, tuple[float, float]] = Field(default_factory=dict)
     candidate_models: list[str] = Field(
         default_factory=lambda: [
-            "logistic_regression",
-            "random_forest",
-            "gradient_boosting",
-            "xgboost",
-            "lightgbm",
+            "Gradient boosting",
+            "LightGBM",
+            "CatBoost",
+            "Stacking ensemble",
         ],
         min_length=1,
     )
     min_rows: int = Field(2000, ge=1)
     calibrate: bool = False
+    training_protocol_path: Path | None = None
+    training_cv_folds: int = Field(0, ge=0)
+    training_cv_repeats: int = Field(3, ge=1)
+
+    @field_validator("training_cv_folds")
+    @classmethod
+    def _cv_folds(cls, value: int) -> int:
+        if value == 1:
+            raise ValueError("training_cv_folds must be 0 (off) or at least 2")
+        return value
 
     @field_validator("seeds", "candidate_models")
     @classmethod
@@ -258,6 +267,16 @@ class SplitOutput(Outcome):
     train_negatives: int | None = Field(None, ge=0)
 
 
+class TreatmentPlan(Schema):
+    """Portable repair recipe; contains no fitted statistics or executable objects."""
+
+    version: Literal[1] = 1
+    dataset_config: dict[str, Any]
+    treatments: dict[str, Literal["drop", "median", "mode", "model_missing", "keep_category"]]
+    excluded: list[str]
+    source_columns: list[str]
+
+
 class PreprocessOutput(Outcome):
     """Pre-processing to Model Selection. raw and baseline are two file sets (see section 1)."""
 
@@ -278,6 +297,8 @@ class PreprocessOutput(Outcome):
     plot_paths: list[Path] = Field(default_factory=list)
     treatment_log_path: Path | None = None
     transformer_path: Path | None = None
+    treatment_plan_path: Path | None = None
+    treatment_plan_sha256: str | None = None
     transformer_fit_rows: int | None = Field(None, ge=1)
     # Class counts of the baseline training file, after any duplicate rows were dropped. Fill
     # levels are computed from these, not from SplitOutput, which counts the split before cleaning.
@@ -334,8 +355,31 @@ class LevelReport(Schema):
         return self
 
 
+# What a diagnosis may suggest changing. Model selection turns these into settings inside the
+# config bounds; the numbers are never chosen here.
+Adjustment = Literal["more_epochs", "change_pac", "rebalance_categories", "change_sampling"]
+
+
+class QualityDiagnosis(Schema):
+    """Why a quality report failed and what to try next. It explains the verdict, never sets it."""
+
+    failed_checks: list[str]
+    columns: list[str]
+    likely_cause: str
+    adjustments: list[Adjustment]
+
+    @model_validator(mode="after")
+    def _filled_in(self) -> Self:
+        if not (self.failed_checks and self.likely_cause.strip() and self.adjustments):
+            raise ValueError("a diagnosis needs failed checks, a likely cause and an adjustment")
+        return self
+
+
 class QualityReport(Outcome):
-    """Quality Evaluation to Orchestrator. A FAIL verdict is a result, not a failed stage."""
+    """Quality Evaluation to Orchestrator. A FAIL verdict is a result, not a failed stage.
+
+    On a FAIL, `diagnosis` rides along to model selection in the retry request.
+    """
 
     required_on_success: ClassVar[tuple[str, ...]] = ("verdict", "levels", "report_path")
 
@@ -343,6 +387,7 @@ class QualityReport(Outcome):
     levels: list[LevelReport] = Field(default_factory=list)
     report_path: Path | None = None
     plot_paths: list[Path] = Field(default_factory=list)
+    diagnosis: QualityDiagnosis | None = None
 
     @model_validator(mode="after")
     def _verdict_matches_levels(self) -> Self:
@@ -377,6 +422,14 @@ class ModelRecord(Outcome):
     model_path: Path | None = None
     val_predictions_path: Path | None = None
     test_predictions_path: Path | None = None
+    threshold: float | None = Field(None, ge=0, le=1)
+    protocol_id: str | None = None
+    selected: bool = False
+    validation_probability_range: float | None = Field(None, ge=0, le=1)
+    training_rows: int | None = Field(None, ge=1)
+    synthetic_rows: int = Field(0, ge=0)
+    val_metrics: dict[str, float] = Field(default_factory=dict)
+    test_metrics: dict[str, float] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def _fill_level_matches_arm(self) -> Self:
@@ -394,6 +447,11 @@ class TrainingOutput(Outcome):
     required_on_success: ClassVar[tuple[str, ...]] = ("records",)
 
     records: list[ModelRecord] = Field(default_factory=list)
+    metrics_path: Path | None = None
+    validation_summary_path: Path | None = None
+    protocol_path: Path | None = None
+    cv_metrics_path: Path | None = None
+    cv_predictions_path: Path | None = None
 
     @model_validator(mode="after")
     def _records_consistent(self) -> Self:
@@ -479,6 +537,8 @@ class TrainingRequest(Schema):
     """Orchestrator to Model Training. No accepted synthetic sets means the GAN arm is not run."""
 
     config: RunConfig
+    treatment_plan_path: Path | None = None
+    treatment_plan_sha256: str | None = None
     raw: ArmFiles
     baseline: ArmFiles
     accepted_synthetic: list[SyntheticSet] = Field(default_factory=list)

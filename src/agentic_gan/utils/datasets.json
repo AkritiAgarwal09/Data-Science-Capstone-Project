@@ -74,11 +74,11 @@
     "include_duration": false
   },
   "ieee_cis": {
-    "file": "data/external/ieee-fraud-detection/train_transaction.csv",
+    "file": "data/external/train_transaction.csv",
     "target": "isFraud",
     "id_column": "TransactionID",
     "merge": {
-      "file": "data/external/ieee-fraud-detection/train_identity.csv",
+      "file": "data/external/train_identity.csv",
       "on": "TransactionID",
       "how": "left"
     },
