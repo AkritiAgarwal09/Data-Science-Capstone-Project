@@ -15,6 +15,7 @@ from agentic_gan.schemas import (
     SyntheticSet,
     fill_rows,
 )
+from agentic_gan.tools.quality_privacy import PRIVACY_CHECKS
 from agentic_gan.tools.selection import (
     ColumnSpec,
     DataCharacteristics,
@@ -34,7 +35,6 @@ CTGAN_DEFAULTS = {
     "discriminator_steps": 1,
 }
 FIDELITY_TOKENS = ("column_distance", "correlation", "ks", "js", "fidelity")
-PRIVACY_TOKENS = ("dcr", "duplicate", "privacy")
 # A constant cohort is the horizon id, not a ratio the generator should learn.
 HORIZON_LABEL = "cohort"
 
@@ -262,7 +262,7 @@ def _retry_settings(
     settings: dict[str, int], request: ModelSelectionInput, run: RunDir
 ) -> dict[str, int]:
     failed = _failed_hard_checks(request)
-    privacy = _matches(failed, PRIVACY_TOKENS)
+    privacy = _privacy_failed(failed)
     fidelity = _matches(failed, FIDELITY_TOKENS)
     bounds = request.config.gan_bounds
     previous = settings["epochs"]
@@ -291,6 +291,11 @@ def _retry_settings(
 
 def _matches(names: list[str], tokens: tuple[str, ...]) -> bool:
     return any(token in name for name in names for token in tokens)
+
+
+def _privacy_failed(failed: list[str]) -> bool:
+    """Exact names from the privacy tool; a substring match missed exact_train_copies."""
+    return bool(set(failed) & PRIVACY_CHECKS)
 
 
 def _log_retry(rule, attempt, previous, proposed, bounds, failed, rationale, run: RunDir) -> None:

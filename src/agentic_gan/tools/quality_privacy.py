@@ -23,6 +23,9 @@ from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from agentic_gan.schemas import CheckResult, QualityThresholds
 from agentic_gan.tools.baselines import pr_auc_score
 
+# The hard privacy checks this module emits; agents use the exact names, not substrings.
+PRIVACY_CHECKS = {"exact_train_copies", "synthetic_duplicates", "dcr_ratio"}
+
 
 def _features(
     real_train: pd.DataFrame, real_val: pd.DataFrame, synthetic: pd.DataFrame, target: str

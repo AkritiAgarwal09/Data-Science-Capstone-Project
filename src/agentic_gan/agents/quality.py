@@ -28,11 +28,10 @@ from agentic_gan.schemas import (
     Verdict,
 )
 from agentic_gan.tools.quality_fidelity import RULES, fidelity_checks, schema_thresholds
-from agentic_gan.tools.quality_privacy import quality_privacy_checks
+from agentic_gan.tools.quality_privacy import PRIVACY_CHECKS, quality_privacy_checks
 from agentic_gan.utils.datasets import DATASETS
 from agentic_gan.utils.files import write_text_atomic
 
-PRIVACY_CHECKS = {"exact_train_copies", "synthetic_duplicates", "dcr_ratio"}
 DIAGNOSIS_PROMPT = (
     "You explain why synthetic tabular data failed a quality gate, for the person tuning the "
     "generator. Use only the check results given: each failed check lists its value and the "

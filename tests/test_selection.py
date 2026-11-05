@@ -20,6 +20,7 @@ from agentic_gan.schemas import (
     Verdict,
     fill_rows,
 )
+from agentic_gan.tools.quality_privacy import PRIVACY_CHECKS
 from agentic_gan.tools.selection import (
     DATASET_STRUCTURE,
     DEFAULT_WIDE_TEMPORAL,
@@ -540,6 +541,30 @@ def test_privacy_failure_does_not_add_epochs(tmp_path, gan):
     request, run, _path = _request(
         tmp_path, config, frame, 500, 1500, attempt=2,
         previous=_fail_report("column_distance", "dcr_ratio"),
+    )
+    run_model_selection(request, run)
+    assert gan.trains[0][1]["epochs"] == 300
+    assert _logged(run, "retry_unchanged") == "UNCHANGED"
+
+
+def test_exact_train_copies_does_not_add_epochs(tmp_path, gan):
+    # The old substring match ("dcr", "duplicate", "privacy") missed this check name.
+    config = _config(tmp_path, gan_bounds={"epochs": (100, 600)})
+    request, run, _path = _request(
+        tmp_path, config, _bank_frame(), 500, 1500, attempt=2,
+        previous=_fail_report("column_distance", "exact_train_copies"),
+    )
+    run_model_selection(request, run)
+    assert gan.trains[0][1]["epochs"] == 300
+    assert _logged(run, "retry_unchanged") == "UNCHANGED"
+
+
+@pytest.mark.parametrize("check", sorted(PRIVACY_CHECKS))
+def test_every_privacy_check_name_blocks_more_epochs(tmp_path, gan, check):
+    config = _config(tmp_path, gan_bounds={"epochs": (100, 600)})
+    request, run, _path = _request(
+        tmp_path, config, _bank_frame(), 500, 1500, attempt=2,
+        previous=_fail_report("column_distance", check),
     )
     run_model_selection(request, run)
     assert gan.trains[0][1]["epochs"] == 300
