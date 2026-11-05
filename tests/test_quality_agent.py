@@ -158,16 +158,11 @@ def test_quality_agent_in_graph(tmp_path, monkeypatch, scenario, attempts, avail
     agents[Stage.PREPROCESSING] = PreprocessFixture()
     generator = GeneratorFixture()
     agents[Stage.MODEL_SELECTION] = generator
-    monkeypatch.setattr(graph_module, "default_agents", lambda: agents)
-    # This test exercises quality routing; keep the downstream model-training stage stubbed.
-    monkeypatch.setattr(graph_module, "run_training", agents[Stage.TRAINING])
-    # Only failed attempts are diagnosed, so a pass makes no LLM call.
-    llm = FakeLLM([FIXTURE_DIAGNOSIS] * 3)
-    monkeypatch.setattr(
-        graph_module, "run_quality", partial(quality_module.run_quality, client=llm)
+    # Explicit fixtures keep this routing test independent of the real split/repair stages.
+    agents[Stage.QUALITY_CHECK] = quality_module.run_quality
+    state, run = graph_module.run_pipeline(
+        _config(tmp_path), runs_dir=tmp_path / "runs", agents=agents
     )
-
-    state, run = graph_module.run_pipeline(_config(tmp_path), runs_dir=tmp_path / "runs")
     assert state.is_complete
     assert state.gan_available is available
     assert state.attempts(Stage.QUALITY_CHECK) == attempts

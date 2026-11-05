@@ -1,6 +1,7 @@
 """Training handoffs, frozen settings, provenance, and fold-local evaluation."""
 
 import json
+import os
 import shutil
 from dataclasses import asdict
 
@@ -13,6 +14,8 @@ from sklearn.dummy import DummyClassifier
 from sklearn.linear_model import LogisticRegression
 
 from agentic_gan.agents import training as training
+from agentic_gan.llm import FakeLLM, RuleOverrideError
+from agentic_gan.orchestrator.decisions import read_decisions
 from agentic_gan.orchestrator.graph import run_pipeline
 from agentic_gan.orchestrator.manifest import create_run
 from agentic_gan.orchestrator.stubs import default_agents
@@ -48,7 +51,7 @@ def experiment(tmp_path, monkeypatch):
     return make_experiment(tmp_path)
 
 
-def make_experiment(tmp_path, *, cv_folds=3):
+def make_experiment(tmp_path, *, cv_folds=3, missing=False):
     source = tmp_path / "default.csv"
     rng = np.random.default_rng(11)
     pd.DataFrame(
@@ -59,6 +62,10 @@ def make_experiment(tmp_path, *, cv_folds=3):
             "y": [0, 0, 0, 1] * 30,
         }
     ).to_csv(source, index=False)
+    if missing:
+        data = pd.read_csv(source)
+        data.loc[::6, "LIMIT_BAL"] = np.nan
+        data.to_csv(source, index=False)
     cfg = RunConfig(
         dataset_name="default",
         dataset_path=source,
@@ -402,6 +409,17 @@ def test_default_graph_dispatches_to_training_agent(experiment, monkeypatch):
         calls.append(incoming)
         return stub(incoming, run)
 
+    from agentic_gan.agents.preprocessing import preprocess
+    from agentic_gan.llm import FakeLLM
+
+    monkeypatch.setattr(
+        graph, "preprocess", lambda req, run: preprocess(req, run, client=FakeLLM([]))
+    )
+    from agentic_gan.agents.evaluation import run_evaluation
+
+    monkeypatch.setattr(
+        graph, "run_evaluation", lambda req, run: run_evaluation(req, run, client=FakeLLM([]))
+    )
     monkeypatch.setattr(graph, "run_training", capture)
     monkeypatch.setattr(graph, "run_quality", default_agents()[Stage.QUALITY_CHECK])
     state, _ = graph.run_pipeline(
@@ -511,3 +529,268 @@ def test_orchestrator_passes_only_quality_accepted_levels(experiment):
     assert set(metrics.query("arm == 'ctgan'").fill_level) == {0.25}
     assert set(metrics.query("arm == 'smotenc'").fill_level) == {0.25, 0.5}
     assert run.load_manifest().verify(run) == []
+
+
+# --- LLM run plan -------------------------------------------------------------------------
+
+PROTOCOL = {"protocol_id": "p1", "thresholds": {"A": 0.3}, "models": {"A": {}}}
+SIZES = {
+    "train_rows": 90,
+    "train_positives": 22,
+    "validation_positives": 500,
+    "test_positives": 500,
+}
+
+
+def _quality(tmp_path, passed_by_level):
+    failed = CheckResult(name="worst_column_distance", value=0.2, threshold=0.1, passed=False)
+    ok = CheckResult(name="worst_column_distance", value=0.05, threshold=0.1, passed=True)
+    levels = [
+        LevelReport(fill_level=lv, checks=[ok if p else failed], passed=p)
+        for lv, p in passed_by_level.items()
+    ]
+    return QualityReport(
+        status=Status.SUCCESS,
+        verdict=Verdict.PASS if any(passed_by_level.values()) else Verdict.FAIL,
+        levels=levels,
+        report_path=tmp_path / "quality.json",
+    )
+
+
+def _plan(**changes):
+    plan = {
+        "smote_levels": [0.25],
+        "gan_levels": [0.5],
+        "seeds": [42],
+        "repeated_cv": False,
+        "reason": "Keep the run small",
+    }
+    return {**plan, **changes}
+
+
+def _llm_decisions(run):
+    decisions = read_decisions(run)
+    return decisions[decisions.rule == "llm_step"]
+
+
+@pytest.fixture
+def planning(experiment, tmp_path):
+    request, run, _, _, extras = experiment
+    request = request.updated(accepted_synthetic=extras)  # both levels have a synthetic set
+    quality = _quality(tmp_path, {0.25: False, 0.5: True})
+    return request, run, quality
+
+
+def test_plan_within_the_allowed_values_is_used_and_logged(planning):
+    request, run, quality = planning
+    fake = FakeLLM([_plan()])
+    plan = training.plan_training(request, run, PROTOCOL, SIZES, quality, client=fake)
+    assert plan.gan_levels == [0.5] and plan.seeds == [42] and plan.smote_levels == [0.25]
+    assert len(fake.calls) == 1
+    context = json.loads(fake.calls[0][1])
+    assert context["allowed"]["gan_levels"] == [0.5]
+    assert context["quality"]["levels"][0]["failed_hard_checks"] == ["worst_column_distance"]
+    assert context["small_evaluation_warning"] is None
+    assert _llm_decisions(run).iloc[0].outcome["gan_levels"] == [0.5]
+
+
+def test_plan_that_trains_on_a_failed_level_is_rejected(planning):
+    request, run, quality = planning
+    bad = _plan(gan_levels=[0.25, 0.5])  # 0.25 failed the quality gate
+    fake = FakeLLM([bad, bad])
+    plan = training.plan_training(request, run, PROTOCOL, SIZES, quality, client=fake)
+    assert plan == training.default_plan(request, [0.5])
+    assert len(fake.calls) == 2  # one retry, then the fallback
+    assert _llm_decisions(run).iloc[0].outcome == "LLM_FALLBACK"
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        _plan(seeds=[999]),
+        _plan(smote_levels=[0.75]),
+        _plan(seeds=[]),
+        _plan(gan_levels=[0.5, 0.5]),
+        {**_plan(), "models": ["Logistic"]},
+        {**_plan(), "threshold": 0.9},
+    ],
+)
+def test_invalid_plans_fall_back_to_the_default(planning, bad):
+    request, run, quality = planning
+    plan = training.plan_training(
+        request, run, PROTOCOL, SIZES, quality, client=FakeLLM([bad, bad])
+    )
+    assert plan == training.default_plan(request, [0.5])
+    assert _llm_decisions(run).iloc[0].outcome == "LLM_FALLBACK"
+
+
+def test_llm_error_falls_back_to_the_default(planning):
+    request, run, quality = planning
+    fake = FakeLLM([TimeoutError("timed out"), TimeoutError("timed out")])
+    plan = training.plan_training(request, run, PROTOCOL, SIZES, quality, client=fake)
+    assert plan == training.default_plan(request, [0.5])
+    assert _llm_decisions(run).iloc[0].outcome == "LLM_FALLBACK"
+
+
+def test_without_a_quality_report_every_accepted_level_is_allowed(planning):
+    request, run, _ = planning
+    plan = training.plan_training(
+        request, run, PROTOCOL, SIZES, None, client=FakeLLM([_plan(gan_levels=[0.25, 0.5])])
+    )
+    assert plan.gan_levels == [0.25, 0.5]
+
+
+def test_small_evaluation_set_is_flagged_to_the_llm(planning):
+    request, run, quality = planning
+    fake = FakeLLM([_plan()])
+    sizes = {**SIZES, "test_positives": 30}
+    training.plan_training(request, run, PROTOCOL, sizes, quality, client=fake)
+    warning = json.loads(fake.calls[0][1])["small_evaluation_warning"]
+    assert "test" in warning and "validation" not in warning
+
+
+def test_changed_rules_during_planning_are_rejected(planning):
+    request, run, quality = planning
+
+    class EditsTheConfig(FakeLLM):
+        def complete(self, system_prompt, context, output_model):
+            run.config_path.write_text(run.config_path.read_text().replace("- 43", "- 99", 1))
+            return super().complete(system_prompt, context, output_model)
+
+    with pytest.raises(RuleOverrideError):
+        training.plan_training(
+            request, run, PROTOCOL, SIZES, quality, client=EditsTheConfig([_plan()])
+        )
+    assert _llm_decisions(run).iloc[0].outcome == "RULE_OVERRIDE_REJECTED"
+
+
+def test_configured_repeated_cv_cannot_be_dropped_by_the_plan(planning):
+    request, run, quality = planning
+    request = request.updated(config=request.config.updated(training_cv_folds=3))
+    run.config_path.write_text(request.config.to_yaml())
+    bad = _plan(repeated_cv=False)
+    plan = training.plan_training(
+        request, run, PROTOCOL, SIZES, quality, client=FakeLLM([bad, bad])
+    )
+    assert plan.repeated_cv is True  # the fallback keeps the configured CV
+    assert _llm_decisions(run).iloc[0].outcome == "LLM_FALLBACK"
+
+
+SUMMARY = {"summary": "Run finished; the results table has the scores."}
+
+
+def _run_with_plan(request, run, quality, answers):
+    fake = FakeLLM([*answers, SUMMARY])
+    result = training.run_training(request, run, quality=quality, client=fake)
+    return result, fake, pd.read_csv(result.metrics_path)
+
+
+def test_run_trains_only_what_the_plan_allows(planning):
+    request, run, quality = planning
+    result, fake, metrics = _run_with_plan(request, run, quality, [_plan()])
+    assert result.status is Status.SUCCESS
+    assert len(fake.calls) == 2  # the plan, then the summary
+    assert set(metrics.seed) == {42}
+    assert set(metrics.query("arm == 'smotenc'").fill_level) == {0.25}
+    assert set(metrics.query("arm == 'ctgan'").fill_level) == {0.5}
+    assert {"original", "cleaned"} <= set(metrics.arm)
+    saved = json.loads((run.subdir("models") / "training_plan.json").read_text())
+    assert saved["gan_levels"] == [0.5] and saved["seeds"] == [42]
+
+
+def test_run_never_trains_ctgan_on_a_failed_level(planning):
+    request, run, quality = planning
+    bad = _plan(gan_levels=[0.25, 0.5])  # 0.25 failed the gate
+    result, _, metrics = _run_with_plan(request, run, quality, [bad, bad])
+    assert result.status is Status.SUCCESS
+    assert set(metrics.query("arm == 'ctgan'").fill_level) == {0.5}
+    assert _llm_decisions(run).iloc[0].outcome == "LLM_FALLBACK"
+
+
+def test_plan_without_synthetic_arms_still_runs_the_real_arms(planning):
+    request, run, quality = planning
+    plan = _plan(smote_levels=[], gan_levels=[])
+    _, _, metrics = _run_with_plan(request, run, quality, [plan])
+    assert set(metrics.arm) == {"original", "cleaned"}
+
+
+def test_run_without_a_quality_report_makes_no_llm_call(planning):
+    request, run, _ = planning
+    fake = FakeLLM([])  # any call would fail
+    result = training.run_training(request, run, client=fake)
+    assert result.status is Status.SUCCESS and not fake.calls
+    metrics = pd.read_csv(result.metrics_path)
+    assert set(metrics.query("arm == 'ctgan'").fill_level) == {0.25, 0.5}
+    decisions = read_decisions(run)
+    assert (decisions.outcome.astype(str).str.contains("seeds")).any()
+
+
+def test_run_reads_the_quality_agents_saved_report(planning):
+    request, run, quality = planning
+    folder = run.subdir("quality")
+    for attempt in (1, 2):  # the newest report is used
+        report = quality if attempt == 2 else _quality(folder, {0.25: True, 0.5: True})
+        (folder / f"quality_report_attempt_{attempt}.json").write_text(report.model_dump_json())
+    fake = FakeLLM([_plan(), SUMMARY])
+    result = training.run_training(request, run, client=fake)
+    metrics = pd.read_csv(result.metrics_path)
+    assert len(fake.calls) == 2
+    assert json.loads(fake.calls[0][1])["allowed"]["gan_levels"] == [0.5]
+    assert set(metrics.query("arm == 'ctgan'").fill_level) == {0.5}
+
+
+def test_frozen_thresholds_are_the_same_whatever_the_plan(planning):
+    request, run, quality = planning
+    result, _, metrics = _run_with_plan(request, run, quality, [_plan()])
+    protocol = json.loads(result.protocol_path.read_text())
+    used = metrics.dropna(subset=["threshold"]).groupby("model").threshold.unique()
+    assert all(len(values) == 1 for values in used)
+    assert {m: v[0] for m, v in used.items()} == pytest.approx(protocol["thresholds"])
+
+
+def test_llm_summary_is_written_from_the_results(planning):
+    request, run, quality = planning
+    text = "The cleaned arm scored best on test PR-AUC."
+    fake = FakeLLM([_plan(), {"summary": text}])
+    training.run_training(request, run, quality=quality, client=fake)
+    assert (run.subdir("models") / "run_summary.md").read_text().strip() == text
+    facts = json.loads(fake.calls[1][1])
+    assert {row["arm"] for row in facts["test_scores"]} >= {"original", "cleaned", "ctgan"}
+    assert all(len(row["test_pr_auc"]) == 5 for row in facts["test_scores"])  # e.g. "0.512"
+
+
+def test_summary_with_an_invented_number_is_replaced_by_the_template(planning):
+    request, run, quality = planning
+    invented = {"summary": "The CTGAN arm reached a PR-AUC of 0.987 on test."}
+    fake = FakeLLM([_plan(), invented, invented])
+    training.run_training(request, run, quality=quality, client=fake)
+    text = (run.subdir("models") / "run_summary.md").read_text()
+    assert "0.987" not in text and text.startswith("default: ")
+    assert _llm_decisions(run).iloc[1].outcome == "LLM_FALLBACK"
+
+
+def test_summary_falls_back_when_the_llm_fails(planning):
+    request, run, quality = planning
+    fake = FakeLLM([_plan(), TimeoutError("timed out"), TimeoutError("timed out")])
+    training.run_training(request, run, quality=quality, client=fake)
+    assert (run.subdir("models") / "run_summary.md").read_text().startswith("default: ")
+    assert _llm_decisions(run).iloc[1].outcome == "LLM_FALLBACK"
+
+
+def test_run_without_a_quality_report_writes_the_template_summary(planning):
+    request, run, _ = planning
+    fake = FakeLLM([])
+    training.run_training(request, run, client=fake)
+    assert not fake.calls
+    text = (run.subdir("models") / "run_summary.md").read_text()
+    assert text.startswith("default: ") and "Test PR-AUC" in text
+
+
+@pytest.mark.live
+@pytest.mark.skipif(not os.environ.get("RUN_LIVE_LLM"), reason="set RUN_LIVE_LLM=1 to call Vertex")
+def test_live_vertex_plan_stays_within_the_allowed_values(planning):
+    request, run, quality = planning
+    plan = training.plan_training(request, run, PROTOCOL, SIZES, quality)  # real Vertex client
+    assert set(plan.gan_levels) <= {0.5}  # 0.25 failed the quality gate
+    assert set(plan.seeds) <= {42, 43}
+    assert _llm_decisions(run).iloc[0].outcome != "LLM_FALLBACK"

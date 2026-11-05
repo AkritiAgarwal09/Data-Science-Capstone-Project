@@ -1,4 +1,4 @@
-"""Run the placeholder pipeline."""
+"""Run the agent pipeline through the verified evaluation report."""
 
 import argparse
 

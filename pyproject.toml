@@ -58,5 +58,4 @@ select = ["E", "F", "I", "UP", "B"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-m 'not live'"
-markers = ["live: calls the real Vertex model; deselected by default, run with `pytest -m live`"]
+markers = ["live: calls the real LLM (needs Vertex access); skipped unless RUN_LIVE_LLM=1"]

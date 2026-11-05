@@ -267,6 +267,16 @@ class SplitOutput(Outcome):
     train_negatives: int | None = Field(None, ge=0)
 
 
+class TreatmentPlan(Schema):
+    """Portable repair recipe; contains no fitted statistics or executable objects."""
+
+    version: Literal[1] = 1
+    dataset_config: dict[str, Any]
+    treatments: dict[str, Literal["drop", "median", "mode", "model_missing", "keep_category"]]
+    excluded: list[str]
+    source_columns: list[str]
+
+
 class PreprocessOutput(Outcome):
     """Pre-processing to Model Selection. raw and baseline are two file sets (see section 1)."""
 
@@ -287,6 +297,8 @@ class PreprocessOutput(Outcome):
     plot_paths: list[Path] = Field(default_factory=list)
     treatment_log_path: Path | None = None
     transformer_path: Path | None = None
+    treatment_plan_path: Path | None = None
+    treatment_plan_sha256: str | None = None
     transformer_fit_rows: int | None = Field(None, ge=1)
     # Class counts of the baseline training file, after any duplicate rows were dropped. Fill
     # levels are computed from these, not from SplitOutput, which counts the split before cleaning.
@@ -524,6 +536,8 @@ class TrainingRequest(Schema):
     """Orchestrator to Model Training. No accepted synthetic sets means the GAN arm is not run."""
 
     config: RunConfig
+    treatment_plan_path: Path | None = None
+    treatment_plan_sha256: str | None = None
     raw: ArmFiles
     baseline: ArmFiles
     accepted_synthetic: list[SyntheticSet] = Field(default_factory=list)

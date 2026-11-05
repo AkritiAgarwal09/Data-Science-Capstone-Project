@@ -49,3 +49,66 @@ output = run_preprocessing("bank_marketing")
 ```
 
 The `Preprocessor`, `profile_dataframe`, and `write_treatment_log` functions remain available to agent code for explicit use. IEEE-CIS outputs are only produced when the two local source CSVs are present.
+
+## LLM agent (#74)
+
+`agents.preprocessing.preprocess(request, run, client=...)` consumes a
+`PreprocessInput` and returns `PreprocessOutput`. `PreprocessingAgent(client=...)`
+provides the callable interface for the orchestrator's agent mapping. Existing CLI
+preprocessing remains deterministic.
+
+The agent profiles training rows only (types, missing counts, placeholder counts,
+duplicates and numeric skew). It requests a typed treatment and one-line reason for
+each affected column through the shared runtime, which uses temperature zero,
+retries invalid output once and logs `LLM_FALLBACK` on failure. The table is enforced
+in code: under 5% missing uses median/mode; at least 5% uses a seeded random forest
+plus a missing indicator. Forest predictors exclude labels, provenance and excluded
+features. If a forest cannot be fitted, training median/mode is used and logged.
+Dataset semantic rules restrict choices further: Bank's unknown categories and
+pdays sentinel remain informative; duration follows the config; IEEE keeps its
+20% value-drop rule, missing flags and fixed category buckets. Outliers are profiled
+and retained. A rule may consequently allow only one treatment.
+
+Whole-row duplicates are removed only from training, ignoring the source-row ID.
+Holdouts reuse the serialized training-fitted processor. Outputs are raw/cleaned,
+unencoded CSVs, matching the current file-based agent convention, plus
+`profile/profile.json`, `profile/treatment_log.csv`, and `profile/preprocessor.pkl`.
+Source-row IDs are preserved when supplied. IEEE inputs must already be the joined,
+time-split training sample and holdouts; the agent does not create a new split.
+
+Run offline coverage with `uv run pytest tests/test_preprocessing_agent.py`.
+No live LLM test or credentials are required.
+
+### Pipeline integration
+
+The default graph now runs `split_for_training` and `preprocess` before model
+selection, quality checks and training. The splitter uses dataset loaders (including
+Polish archives and the IEEE identity join), the frozen split recipe, and stable
+`source_row` IDs. The older generic `split_data` API remains available.
+
+Preprocessing also writes `profile/treatment_plan.json`, a typed, versioned recipe
+with chosen actions, exclusions, source column names, and the dataset configuration.
+`PreprocessOutput` carries its path and SHA-256 digest; the graph passes both to
+`TrainingRequest`, and the manifest registers the plan. Training verifies the digest,
+dataset settings, source rows and cleaned artifacts, then rebuilds the transformations
+from the plan. It does not execute the preprocessing pickle to load a recipe.
+
+For final fitting, each repeated-CV training fold, and stacking's inner folds,
+repair models and statistics are fitted on that fit's real raw rows only. Synthetic
+rows are already cleaned; they are encoded by the real-row-fitted transformer and
+never train repair models or scaling. Missing flags are discrete inputs to SMOTENC.
+Training-only deduplication is repeated within outer folds, and class counts reflect
+retained rows. The plan's chosen actions stay fixed; no extra LLM calls occur in CV.
+
+Legacy training requests without a plan retain deterministic preprocessing. Frozen
+reference protocols and their existing drift checks are still required. Full-split
+accepted GAN rows are not reused in repeated CV: a fold-local, quality-checked
+`cv_gan_factory` is required, as before. The final evaluation agent now consumes
+training results and writes a number-verified report; see `docs/evaluation.md`.
+
+Offline integration coverage (all four dataset loaders, all training arms, repeated
+CV, stacking, plan tampering, and artifact manifests):
+
+```bash
+uv run pytest tests/test_preprocessing_pipeline.py tests/test_ieee_preprocessing.py
+```
