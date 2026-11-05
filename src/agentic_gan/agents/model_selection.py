@@ -216,7 +216,7 @@ def run_model_selection(
         return GeneratorOutput(status=Status.SKIPPED, reason=reason, rationale=reason)
 
     if request.attempt >= 2:
-        settings = _retry_settings(settings, request, run)
+        settings = _propose_retry(settings, request, run, client)
     return _train_ctgan(request, run, model_frame, settings, result)
 
 
@@ -418,22 +418,116 @@ def _rule_retry(
     return updated, "hyperparameter_retry", rationale
 
 
-def _retry_settings(
-    settings: dict[str, int], request: ModelSelectionInput, run: RunDir
+def _normalize(answer: RetrySettings, limits: dict[str, tuple[int, int]]) -> dict[str, int] | None:
+    """Make a proposal a legal CTGAN setting, or None if that is not possible inside the limits.
+
+    The runtime already enforced the numeric bounds; the clip is a safety net. CTGAN raises
+    unless batch_size is a multiple of pac, so a non-divisible batch is snapped down (or up to
+    the first multiple inside the range).
+    """
+    values = {}
+    for name in SETTING_NAMES:
+        low, high = limits[name]
+        values[name] = int(min(max(getattr(answer, name), low), high))
+    if any(value < 1 for value in values.values()):
+        return None
+    batch, pac = values["batch_size"], values["pac"]
+    if batch % pac != 0:
+        low, high = limits["batch_size"]
+        snapped = batch // pac * pac
+        if snapped < low:
+            snapped += pac
+        if not low <= snapped <= high:
+            return None
+        values["batch_size"] = snapped
+    return values
+
+
+def _failed_check_summaries(request: ModelSelectionInput) -> list[dict]:
+    report = request.previous_report
+    if report is None:
+        return []
+    return [
+        {
+            "fill_level": level.fill_level,
+            "name": check.name,
+            "value": check.value,
+            "limit": check.threshold,
+        }
+        for level in report.levels
+        for check in level.checks
+        if check.hard and not check.passed
+    ]
+
+
+def _propose_retry(
+    settings: dict[str, int], request: ModelSelectionInput, run: RunDir, client
 ) -> dict[str, int]:
-    """Apply the rule retry and log it."""
-    updated, rule, rationale = _rule_retry(settings, request)
+    """Let the LLM propose settings inside gan_bounds; the rule retry is the fallback."""
+    rule_settings, _rule_name, rule_reason = _rule_retry(settings, request)
+    failed = _failed_hard_checks(request)
+    privacy = bool(set(failed) & PRIVACY_CHECKS)
+    limits = _retry_limits(settings, request.config.gan_bounds, privacy)
+    applied, reason = rule_settings, rule_reason
+    if limits is not None:
+        fallback = RetrySettings(**rule_settings, reason="Rule-based default: " + rule_reason)
+        report = request.previous_report
+        diagnosis = report.diagnosis.model_dump() if report and report.diagnosis else None
+        context = json.dumps(
+            {
+                "attempt": request.attempt,
+                "dataset": request.config.dataset_name,
+                "failed_hard_checks": _failed_check_summaries(request),
+                "diagnosis": diagnosis,
+                "current_settings": settings,
+                "limits": {name: list(edges) for name, edges in limits.items()},
+                "privacy_failed": privacy,
+            },
+            default=str,
+        )
+        answer = run_llm_step(
+            Stage.MODEL_SELECTION.value,
+            RETRY_PROMPT,
+            context,
+            RetrySettings,
+            LLMStepOptions(
+                fallback=fallback,
+                numeric_bounds={name: limits[name] for name in SETTING_NAMES},
+                expected_rule_hash=_rule_hash(request.config),
+                current_rule_hash=lambda: _rule_hash(run.load_config()),
+            ),
+            run,
+            client=client,
+        )
+        if answer.reason != fallback.reason:
+            normalized = _normalize(answer, limits)
+            if normalized is None:
+                log_decision(
+                    "model_selection",
+                    "retry_rejected",
+                    {
+                        "attempt": request.attempt,
+                        "proposed": {name: getattr(answer, name) for name in SETTING_NAMES},
+                        "limits": {name: list(edges) for name, edges in limits.items()},
+                    },
+                    "REJECTED",
+                    "could not be made a valid CTGAN setting",
+                    run=run,
+                )
+            else:
+                applied, reason = normalized, answer.reason
+    # Step 4D replaces this line with a log of all four settings and their source.
     _log_retry(
-        rule,
+        "hyperparameter_retry" if applied["epochs"] != settings["epochs"] else "retry_unchanged",
         request.attempt,
         settings["epochs"],
-        updated["epochs"],
+        applied["epochs"],
         request.config.gan_bounds,
-        _failed_hard_checks(request),
-        rationale,
+        failed,
+        reason,
         run,
     )
-    return updated
+    return applied
 
 
 def _matches(names: list[str], tokens: tuple[str, ...]) -> bool:

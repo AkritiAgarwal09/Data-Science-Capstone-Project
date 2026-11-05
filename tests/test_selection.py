@@ -12,6 +12,7 @@ from agentic_gan.agents.model_selection import (
     SelectionExplanation,
     _retry_limits,
     _rule_hash,
+    _rule_retry,
     run_model_selection,
 )
 from agentic_gan.llm import FakeLLM
@@ -726,3 +727,57 @@ def test_retry_limits_pin_a_setting_whose_bound_cannot_hold_it():
     assert limits["pac"] == (10, 10)
     assert limits["epochs"] == (300, 300)
     assert limits["batch_size"] == (100, 1000)
+
+
+# --- Retry proposer ------------------------------------------------------------------------------
+
+PROPOSAL = {"epochs": 500, "pac": 10, "discriminator_steps": 1, "batch_size": 500,
+            "reason": "more training"}
+
+
+def _retry_request(tmp_path, gan_bounds, *failed):
+    config = _config(tmp_path, gan_bounds=gan_bounds)
+    return _request(
+        tmp_path, config, _bank_frame(), 500, 1500, attempt=2, previous=_fail_report(*failed),
+    )
+
+
+@pytest.mark.parametrize(
+    ("gan_bounds", "failed"),
+    [
+        ({"epochs": (100, 600)}, ("column_distance",)),
+        ({"epochs": (100, 600)}, ("column_distance", "dcr_ratio")),
+        ({"epochs": (100, 300)}, ("column_distance",)),
+        ({"epochs": (100, 350)}, ("column_distance",)),
+        ({"epochs": (100, 600), "pac": (5, 10)}, ("column_distance",)),
+    ],
+)
+def test_rule_retry_always_lies_inside_the_retry_limits(tmp_path, gan_bounds, failed):
+    # The runtime validates the fallback against numeric_bounds, so this must hold.
+    request, _run, _path = _retry_request(tmp_path, gan_bounds, *failed)
+    rule_settings, _name, _reason = _rule_retry(CTGAN_DEFAULTS, request)
+    privacy = bool(set(failed) & PRIVACY_CHECKS)
+    limits = _retry_limits(CTGAN_DEFAULTS, gan_bounds, privacy)
+    assert limits is not None
+    for name, (low, high) in limits.items():
+        assert low <= rule_settings[name] <= high
+
+
+def test_llm_proposal_inside_the_limits_is_trained(tmp_path, gan):
+    fake = FakeLLM([PROPOSAL])
+    request, run, _path = _retry_request(tmp_path, {"epochs": (100, 600)}, "column_distance")
+    output = run_model_selection(request, run, client=fake)
+    assert len(fake.calls) == 1  # attempt 2: no explanation call, one proposal call
+    assert output.status is Status.SUCCESS
+    assert gan.trains[0][1]["epochs"] == 500
+    assert _logged(run, "hyperparameter_retry") == "ADJUSTED"
+
+
+def test_llm_proposal_outside_the_limits_falls_back_to_the_rule(tmp_path, gan):
+    fake = FakeLLM([{**PROPOSAL, "epochs": 900}, {**PROPOSAL, "epochs": 900}])
+    request, run, _path = _retry_request(tmp_path, {"epochs": (100, 600)}, "column_distance")
+    run_model_selection(request, run, client=fake)
+    assert len(fake.calls) == 2  # one retry on the invalid answer
+    assert gan.trains[0][1]["epochs"] == 400
+    assert _logged(run, "llm_step") == "LLM_FALLBACK"
+    assert _logged(run, "hyperparameter_retry") == "ADJUSTED"
