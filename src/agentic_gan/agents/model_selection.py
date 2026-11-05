@@ -364,9 +364,14 @@ def _failed_hard_checks(request: ModelSelectionInput) -> list[str]:
     ]
 
 
-def _retry_settings(
-    settings: dict[str, int], request: ModelSelectionInput, run: RunDir
-) -> dict[str, int]:
+def _rule_retry(
+    settings: dict[str, int], request: ModelSelectionInput
+) -> tuple[dict[str, int], str, str]:
+    """The deterministic retry, with no logging: (new settings, rule name, rationale).
+
+    More epochs inside gan_bounds when a fidelity check failed, unless a privacy check failed
+    too. The LLM proposer uses this as its fallback.
+    """
     failed = _failed_hard_checks(request)
     privacy = _privacy_failed(failed)
     fidelity = _matches(failed, FIDELITY_TOKENS)
@@ -374,23 +379,31 @@ def _retry_settings(
     previous = settings["epochs"]
     if privacy or not fidelity or "epochs" not in bounds:
         rationale = "no privacy-safe adjustment" if privacy else "retry has no legal adjustment"
-        _log_retry(
-            "retry_unchanged", request.attempt, previous, previous, bounds, failed, rationale, run
-        )
-        return settings
+        return settings, "retry_unchanged", rationale
     low, high = bounds["epochs"]
     proposed = min(previous + EPOCH_STEP, int(round(high)))
     proposed = max(proposed, int(round(low)))
     if proposed == previous:
-        _log_retry(
-            "retry_unchanged", request.attempt, previous, previous, bounds, failed,
-            "epochs are already at the gan_bounds limit", run,
-        )
-        return settings
+        return settings, "retry_unchanged", "epochs are already at the gan_bounds limit"
     updated = {**settings, "epochs": proposed}
+    rationale = f"epochs move from {previous} to {proposed} inside gan_bounds"
+    return updated, "hyperparameter_retry", rationale
+
+
+def _retry_settings(
+    settings: dict[str, int], request: ModelSelectionInput, run: RunDir
+) -> dict[str, int]:
+    """Apply the rule retry and log it."""
+    updated, rule, rationale = _rule_retry(settings, request)
     _log_retry(
-        "hyperparameter_retry", request.attempt, previous, proposed, bounds, failed,
-        f"epochs move from {previous} to {proposed} inside gan_bounds", run,
+        rule,
+        request.attempt,
+        settings["epochs"],
+        updated["epochs"],
+        request.config.gan_bounds,
+        _failed_hard_checks(request),
+        rationale,
+        run,
     )
     return updated
 
