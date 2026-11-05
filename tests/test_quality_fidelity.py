@@ -8,8 +8,11 @@ from agentic_gan.schemas import CheckResult, QualityThresholds
 from agentic_gan.tools.quality_fidelity import (
     BANK_RULES,
     CRAMERS_V,
+    DEFAULT_RULES,
     LABEL_BALANCE,
     MEAN_DISTANCE,
+    POLISH_RULES,
+    RULES,
     SCHEMA_MATCH,
     SPEARMAN,
     WORST_DISTANCE,
@@ -239,6 +242,62 @@ def test_a_rule_threshold_is_a_rate():
 def test_rule_on_missing_columns_is_a_clear_error():
     with pytest.raises(ValueError, match="pdays"):
         rule_violation_rate(pd.DataFrame({"a": [1]}), BANK_RULES[0])
+
+
+def _default_rows(n: int) -> pd.DataFrame:
+    frame = {f"PAY_{m}": [0] * n for m in range(1, 7)}
+    frame.update({f"PAY_AMT{m}": [100] * n for m in range(1, 7)})
+    frame.update({"SEX": [1] * n, "EDUCATION": [2] * n, "MARRIAGE": [1] * n})
+    return pd.DataFrame(frame)
+
+
+def test_default_rules_catch_bad_codes_and_negative_payments():
+    by_rule = {rule.name: rule for rule in DEFAULT_RULES}
+    clean = _default_rows(4)
+    for rule in DEFAULT_RULES:
+        assert rule_violation_rate(clean, rule) == 0.0
+
+    codes = clean.copy()
+    codes.loc[0, "PAY_3"] = 9  # above the observed range
+    codes.loc[1, "PAY_6"] = -3  # below it
+    assert rule_violation_rate(codes, by_rule["pay_status_codes"]) == 0.5
+
+    paid = clean.copy()
+    paid.loc[2, "PAY_AMT1"] = -1
+    assert rule_violation_rate(paid, by_rule["pay_amount_non_negative"]) == 0.25
+
+    static = clean.copy()
+    static.loc[3, "SEX"] = 3
+    static.loc[0, "MARRIAGE"] = 7
+    assert rule_violation_rate(static, by_rule["static_codes"]) == 0.5
+
+
+def test_polish_rules_catch_missing_ratios_and_bad_labels():
+    by_rule = {rule.name: rule for rule in POLISH_RULES}
+    clean = pd.DataFrame({f"A{i}": [0.5, 1.5] for i in range(1, 65)})
+    clean["bankrupt"] = [0, 1]
+    clean["cohort"] = ["3year", "1year"]
+    for rule in POLISH_RULES:
+        assert rule_violation_rate(clean, rule) == 0.0
+
+    gap = clean.copy()
+    gap.loc[0, "A37"] = float("nan")
+    assert rule_violation_rate(gap, by_rule["ratios_numeric"]) == 0.5
+
+    with pytest.raises(ValueError, match="A64"):
+        rule_violation_rate(clean.drop(columns=["A64"]), by_rule["ratios_numeric"])
+
+    labels = clean.copy()
+    labels.loc[1, "bankrupt"] = 2
+    labels.loc[0, "cohort"] = "6year"
+    assert rule_violation_rate(labels, by_rule["target_binary"]) == 0.5
+    assert rule_violation_rate(labels, by_rule["cohort_label"]) == 0.5
+
+
+def test_every_dataset_rule_set_is_registered():
+    assert set(RULES) == {"bank_marketing", "default", "polish"}
+    assert RULES["default"] is DEFAULT_RULES
+    assert RULES["polish"] is POLISH_RULES
 
 
 def test_label_balance_for_files_that_hold_only_the_positive_class():

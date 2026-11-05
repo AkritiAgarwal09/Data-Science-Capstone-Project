@@ -219,10 +219,11 @@ def test_split_data_writes_the_three_files(config, run):
         assert path.parent == run.subdir("data")
 
 
-def test_the_files_hold_every_source_row_once_with_no_extra_column(config, run):
+def test_the_files_hold_every_source_row_once_with_provenance(config, run):
     out = split_data(config, run)
     parts = [pd.read_csv(p) for p in (out.train_path, out.val_path, out.test_path)]
-    assert all(list(part.columns) == list(make_df().columns) for part in parts)
+    assert all(list(part.columns) == ["source_row", *make_df().columns] for part in parts)
+    assert sorted(pd.concat(parts)["source_row"]) == list(range(1000))
     assert sorted(pd.concat(parts)["id"]) == list(range(1000))
 
 

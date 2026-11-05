@@ -1,0 +1,189 @@
+Polish CTGAN diagnostics
+settings: v1, epochs 300, batch 500, pac 10, discriminator steps 1, seed 42, device cpu
+horizon: all five cohorts pooled, as the cleaned table provides them
+sampling: conditional on bankrupt=1
+selection rule: skipped, generator None, trainable False, fallback None
+  More than one Polish horizon is in the table. One horizon file is required.
+  override: CTGAN was trained on a table the selection rule refused: More than one Polish horizon is in the table. One horizon file is required. This is an EDA experiment, not an agent run.
+  deciding steps: horizon_gate FAIL; temporal_test NOT_REACHED; type_routing NOT_REACHED
+training seconds: 1229.7
+comparison: synthetic fill50 vs real training rows with bankrupt=1
+real bankrupt rows: 1,255
+synthetic rows: 11,766
+numeric plots show the real 1st to 99th percentile so the body of each column is visible
+KS, means, and medians below use every row
+
+Numeric columns
+  A1: mean -0.4698 vs 0.06842; sd 13.23 vs 0.2098; median 0.003463 vs 0.08123; KS 0.372
+  A2: mean 1.961 vs 0.6692; sd 22.34 vs 0.4442; median 0.6758 vs 0.6193; KS 0.091
+  A3: mean -1.168 vs -0.02602; sd 22.27 vs 0.4354; median 0.03162 vs 0.02183; KS 0.085
+  A4: mean 4.381 vs 0.1336; sd 34.47 vs 1.991; median 1.066 vs -0.4031; KS 0.760
+  A5: mean -1178 vs 58.05; sd 3.099e+04 vs 852.6; median -39.51 vs 31.63; KS 0.366
+  A6: mean -1.802 vs -0.08687; sd 26.4 vs 0.5631; median 0 vs -0.008076; KS 0.256
+  A7: mean -0.4624 vs -9.998e-05; sd 13.23 vs 0.2834; median 0.005032 vs 0.03736; KS 0.190
+  A8: mean 8.532 vs 4.7; sd 118.7 vs 7.167; median 0.4512 vs 3.785; KS 0.676
+  A9: mean 1.902 vs 1.507; sd 3.782 vs 1.029; median 1.114 vs 1.22; KS 0.085
+  A10: mean -0.713 vs 0.2; sd 23.68 vs 0.6555; median 0.3037 vs 0.3; KS 0.064
+  A11: mean -0.3754 vs -0.1119; sd 13.12 vs 0.3216; median 0.0169 vs -0.05458; KS 0.338
+  A12: mean -6.026 vs 0.7366; sd 184 vs 2.104; median 0.01082 vs 0.3513; KS 0.422
+  A13: mean 0.5151 vs 0.7897; sd 23.12 vs 0.2535; median 0.01774 vs 0.7988; KS 0.943
+  A14: mean -0.4624 vs -0.03439; sd 13.23 vs 0.3174; median 0.005032 vs 0.005466; KS 0.113
+  A15: mean 4060 vs 167.3; sd 6.14e+04 vs 1.106e+04; median 643.8 vs 537.6; KS 0.127
+  A16: mean -4.649 vs 1.191; sd 178.8 vs 2.14; median 0.04215 vs 0.8256; KS 0.705
+  A17: mean 9.597 vs 5.346; sd 118.7 vs 7.138; median 1.475 vs 4.429; KS 0.587
+  A18: mean -0.4624 vs 0.1884; sd 13.23 vs 0.2183; median 0.005032 vs 0.1668; KS 0.571
+  A19: mean -0.0708 vs 0.1327; sd 5.765 vs 0.3066; median 0.003578 vs 0.1367; KS 0.473
+  A20: mean 80.58 vs 69.2; sd 431.8 vs 63.28; median 36.09 vs 48.25; KS 0.231
+  A21: mean 1.098 vs 1.165; sd 1.978 vs 0.7162; median 1.048 vs 1.162; KS 0.336
+  A22: mean -0.37 vs 0.2162; sd 12.19 vs 0.1868; median 0.02056 vs 0.1893; KS 0.636
+  A23: mean -0.07353 vs -0.2212; sd 5.764 vs 1.428; median 0.002012 vs -0.02795; KS 0.254
+  A24: mean -0.4417 vs 0.0488; sd 13.78 vs 0.4816; median 0.013 vs 0.1012; KS 0.244
+  A25: mean -1.063 vs 0.214; sd 24.63 vs 0.6802; median 0.1631 vs 0.328; KS 0.234
+  A26: mean -4.508 vs 0.4744; sd 178.9 vs 1.383; median 0.03716 vs 0.3518; KS 0.432
+  A27: mean 7.363 vs 469.2; sd 1042 vs 1972; median 1.091 vs 361.1; KS 0.952
+  A28: mean 3.274 vs 1.722; sd 36.84 vs 10.26; median 0.06802 vs 0.3999; KS 0.181
+  A29: mean 3.805 vs 4.046; sd 0.8676 vs 0.7247; median 3.883 vs 4.05; KS 0.129
+  A30: mean 12.92 vs 1.812; sd 258.8 vs 1.583; median 0.3433 vs 1.827; KS 0.550
+  A31: mean 0.03065 vs 0.02748; sd 5.672 vs 0.7892; median 0.006973 vs 0.09362; KS 0.388
+  A32: mean 6428 vs 130.1; sd 1.385e+05 vs 349.3; median 111.7 vs 102.5; KS 0.224
+  A33: mean 11.31 vs 6.804; sd 96.95 vs 8.434; median 3.395 vs 4.524; KS 0.192
+  A34: mean 5.566 vs 1.128; sd 36.54 vs 4.389; median 1.623 vs 0.1581; KS 0.349
+  A35: mean -0.4226 vs 0.02173; sd 12.19 vs 0.2512; median 0.006551 vs 0.05431; KS 0.205
+  A36: mean 3.131 vs 2.816; sd 27.54 vs 1.757; median 1.693 vs 2.383; KS 0.379
+  A37: mean 43.32 vs 43.15; sd 555 vs 121.5; median 3.058 vs 25.97; KS 0.814
+  A38: mean -0.614 vs 0.5778; sd 23.69 vs 0.5212; median 0.4071 vs 0.6702; KS 0.354
+  A39: mean -6.151 vs 0.1592; sd 212.2 vs 0.2005; median 0.004754 vs 0.1609; KS 0.539
+  A40: mean 2.371 vs 0.1903; sd 25.44 vs 2.411; median 0.06358 vs -0.1586; KS 0.661
+  A41: mean -0.06311 vs 0.0535; sd 8.406 vs 1.468; median 0.08715 vs 0.02792; KS 0.108
+  A42: mean 0.02504 vs 0.3142; sd 5.059 vs 0.2934; median 0.01271 vs 0.2728; KS 0.849
+  A43: mean 255.6 vs 68.54; sd 2109 vs 119.8; median 102.4 vs 65.21; KS 0.255
+  A44: mean 175 vs 1.166; sd 1747 vs 229.8; median 50.37 vs -11.69; KS 0.556
+  A45: mean 4.053 vs -7.161; sd 136.8 vs 15.71; median 0.0346 vs -6.73; KS 0.652
+  A46: mean 3.123 vs 1.206; sd 26.2 vs 3.203; median 0.5223 vs 0.9396; KS 0.278
+  A47: mean 102.8 vs -20.12; sd 1063 vs 104.3; median 36.12 vs -32.92; KS 0.692
+  A48: mean -0.5082 vs 0.0487; sd 15.32 vs 0.2047; median -0.01099 vs 0.04224; KS 0.234
+  A49: mean -0.5604 vs -0.11; sd 14.74 vs 0.3175; median -0.006319 vs -0.0424; KS 0.163
+  A50: mean 3.149 vs 3.116; sd 29.24 vs 3.144; median 0.8521 vs 2.914; KS 0.628
+  A51: mean 1.749 vs 0.43; sd 22.29 vs 0.3799; median 0.519 vs 0.3258; KS 0.257
+  A52: mean 1.892 vs -1.198; sd 22.75 vs 1.753; median 0.2957 vs -1.226; KS 0.753
+  A53: mean 78.52 vs -4.291; sd 2460 vs 13.86; median 0.7525 vs -4.343; KS 0.650
+  A54: mean 79.72 vs -5.711; sd 2469 vs 9.699; median 0.9718 vs -5.618; KS 0.722
+  A55: mean 364.3 vs -7131; sd 2.841e+04 vs 2.682e+04; median 46.55 vs -1687; KS 0.572
+  A56: mean -6.11 vs 0.4266; sd 212.3 vs 0.2868; median 0.01553 vs 0.4403; KS 0.700
+  A57: mean -1.388 vs -0.1825; sd 35.82 vs 0.972; median 0.04455 vs -0.06708; KS 0.268
+  A58: mean 1.124 vs 2.799; sd 2.05 vs 1.326; median 0.9823 vs 2.816; KS 0.806
+  A59: mean 0.6899 vs 0.2965; sd 12.26 vs 1.446; median 0 vs 0.0944; KS 0.239
+  A60: mean 131.7 vs 44.43; sd 2616 vs 145.8; median 9.792 vs 21.03; KS 0.356
+  A61: mean 15.13 vs 15.76; sd 47.51 vs 19.67; median 7.17 vs 12.36; KS 0.589
+  A62: mean 2160 vs -234; sd 3.513e+04 vs 264.1; median 110.3 vs -242.6; KS 0.809
+  A63: mean 9.642 vs 6.526; sd 66.96 vs 6.435; median 3.247 vs 4.609; KS 0.229
+  A64: mean 154.2 vs -8.594; sd 3699 vs 32.62; median 4.272 vs -11.39; KS 0.813
+
+Cohort shares among bankrupt rows
+  1year: real 11.9%, synthetic 5.7%
+  2year: real 19.6%, synthetic 3.3%
+  3year: real 23.4%, synthetic 78.7%
+  4year: real 24.3%, synthetic 2.2%
+  5year: real 20.8%, synthetic 10.1%
+  cohort TVD: 0.552
+Cohort shares far from the real bankrupt rows: 2year, 3year, 4year, 5year.
+
+Mean absolute correlation difference: 0.143
+A 64 by 64 heatmap is not a useful check. The largest off-diagonal gaps are:
+  A13, A56: +1.219
+  A13, A39: +1.207
+  A22, A36: +1.106
+  A13, A49: +1.093
+  A18, A36: +1.089
+  A1, A36: +1.055
+  A31, A56: +1.044
+  A36, A48: +1.044
+  A35, A36: +1.010
+  A31, A39: +1.001
+  A36, A7: +1.000
+  A14, A36: +1.000
+  A53, A54: -0.985
+  A31, A42: -0.977
+  A11, A36: +0.969
+  A16, A17: +0.965
+  A24, A36: +0.945
+  A30, A31: -0.944
+  A43, A44: -0.940
+  A12, A17: +0.937
+
+Values outside the training range before clipping
+  share of 21,462 on-target draws per column; the written files are clipped, so this is the only place the overshoot is visible (rule PB-7)
+  source: re-sampled 20,000 on-target rows from the saved model after the run; the written files came from the original sampling pass
+  A4: 69.4% outside (below 69.4%, above 0.0%)
+  A60: 27.8% outside (below 27.8%, above 0.0%)
+  A47: 15.3% outside (below 15.3%, above 0.0%)
+  A17: 3.3% outside (below 3.3%, above 0.0%)
+  A50: 3.0% outside (below 3.0%, above 0.0%)
+
+Columns that struggled
+Numeric columns are ranked by KS. A column is marked as struggling at KS 0.15 or higher. Cohort is marked at TVD 0.10 or higher.
+  A27: KS 0.952. centre is higher (469.2 vs 7.363). spread is wider (sd 1972 vs 1042). negative share 0.2% synthetic vs 28.2% real. struggled.
+  A13: KS 0.943. spread is compressed (sd 0.2535 vs 23.12). negative share 0.2% synthetic vs 38.9% real. struggled.
+  A42: KS 0.849. spread is compressed (sd 0.2934 vs 5.059). negative share 0.7% synthetic vs 41.2% real. struggled.
+  A37: KS 0.814. spread is compressed (sd 121.5 vs 555). struggled.
+  A64: KS 0.813. spread is compressed (sd 32.62 vs 3699). negative share 81.3% synthetic vs 0.0% real. upper tail is short (95th 11.45 vs 93.36). struggled.
+  A62: KS 0.809. spread is compressed (sd 264.1 vs 3.513e+04). negative share 81.0% synthetic vs 0.1% real. upper tail is short (95th 217.9 vs 712.9). struggled.
+  A58: KS 0.806. centre is higher (2.799 vs 1.124). spread is compressed (sd 1.326 vs 2.05). struggled.
+  A4: KS 0.760. spread is compressed (sd 1.991 vs 34.47). negative share 76.1% synthetic vs 0.1% real. upper tail is short (95th 2.058 vs 6.902). struggled.
+  A52: KS 0.753. spread is compressed (sd 1.753 vs 22.75). negative share 75.4% synthetic vs 0.1% real. struggled.
+  A54: KS 0.722. spread is compressed (sd 9.699 vs 2469). negative share 83.3% synthetic vs 12.5% real. upper tail is short (95th 3.748 vs 12.14). struggled.
+  A16: KS 0.705. spread is compressed (sd 2.14 vs 178.8). negative share 3.9% synthetic vs 39.1% real. struggled.
+  A56: KS 0.700. spread is compressed (sd 0.2868 vs 212.3). negative share 7.5% synthetic vs 40.0% real. struggled.
+  A47: KS 0.692. spread is compressed (sd 104.3 vs 1063). negative share 69.2% synthetic vs 0.0% real. upper tail is short (95th 79.66 vs 176.6). struggled.
+  A8: KS 0.676. spread is compressed (sd 7.167 vs 118.7). negative share 4.1% synthetic vs 15.9% real. struggled.
+  A40: KS 0.661. spread is compressed (sd 2.411 vs 25.44). negative share 66.5% synthetic vs 0.4% real. struggled.
+  A45: KS 0.652. spread is compressed (sd 15.71 vs 136.8). negative share 82.9% synthetic vs 40.8% real. struggled.
+  A53: KS 0.650. spread is compressed (sd 13.86 vs 2460). negative share 78.2% synthetic vs 14.6% real. struggled.
+  A22: KS 0.636. spread is compressed (sd 0.1868 vs 12.19). negative share 2.7% synthetic vs 41.9% real. struggled.
+  A50: KS 0.628. spread is compressed (sd 3.144 vs 29.24). struggled.
+  A61: KS 0.589. spread is compressed (sd 19.67 vs 47.51). struggled.
+  A17: KS 0.587. spread is compressed (sd 7.138 vs 118.7). struggled.
+  A55: KS 0.572. centre is lower (-7131 vs 364.3). negative share 95.1% synthetic vs 44.1% real. upper tail is short (95th -13.93 vs 1.634e+04). struggled.
+  A18: KS 0.571. spread is compressed (sd 0.2183 vs 13.23). negative share 8.1% synthetic vs 44.9% real. struggled.
+  A44: KS 0.556. spread is compressed (sd 229.8 vs 1747). negative share 55.6% synthetic vs 0.0% real. struggled.
+  A30: KS 0.550. spread is compressed (sd 1.583 vs 258.8). struggled.
+  A39: KS 0.539. spread is compressed (sd 0.2005 vs 212.2). negative share 21.5% synthetic vs 46.9% real. struggled.
+  A19: KS 0.473. spread is compressed (sd 0.3066 vs 5.765). negative share 29.3% synthetic vs 44.6% real. struggled.
+  A26: KS 0.432. spread is compressed (sd 1.383 vs 178.9). negative share 21.1% synthetic vs 38.8% real. struggled.
+  A12: KS 0.422. spread is compressed (sd 2.104 vs 184). negative share 23.6% synthetic vs 44.8% real. struggled.
+  A31: KS 0.388. spread is compressed (sd 0.7892 vs 5.672). struggled.
+  A36: KS 0.379. spread is compressed (sd 1.757 vs 27.54). struggled.
+  A1: KS 0.372. spread is compressed (sd 0.2098 vs 13.23). negative share 24.0% synthetic vs 45.2% real. struggled.
+  A5: KS 0.366. spread is compressed (sd 852.6 vs 3.099e+04). negative share 46.4% synthetic vs 73.7% real. struggled.
+  A60: KS 0.356. spread is compressed (sd 145.8 vs 2616). negative share 35.6% synthetic vs 0.0% real. struggled.
+  A38: KS 0.354. spread is compressed (sd 0.5212 vs 23.69). struggled.
+  A34: KS 0.349. spread is compressed (sd 4.389 vs 36.54). negative share 45.3% synthetic vs 11.1% real. upper tail is short (95th 5.451 vs 13.5). struggled.
+  A11: KS 0.338. spread is compressed (sd 0.3216 vs 13.12). negative share 74.3% synthetic vs 40.6% real. upper tail is short (95th 0.08508 vs 0.3269). struggled.
+  A21: KS 0.336. spread is compressed (sd 0.7162 vs 1.978). struggled.
+  A46: KS 0.278. spread is compressed (sd 3.203 vs 26.2). negative share 28.0% synthetic vs 0.2% real. struggled.
+  A57: KS 0.268. spread is compressed (sd 0.972 vs 35.82). negative share 62.3% synthetic vs 35.8% real. upper tail is short (95th 0.4273 vs 1.284). struggled.
+  A51: KS 0.257. spread is compressed (sd 0.3799 vs 22.29). struggled.
+  A6: KS 0.256. spread is compressed (sd 0.5631 vs 26.4). zero share 0.0% synthetic vs 34.5% real. negative share 53.0% synthetic vs 41.6% real. struggled.
+  A43: KS 0.255. spread is compressed (sd 119.8 vs 2109). negative share 21.9% synthetic vs 0.0% real. struggled.
+  A23: KS 0.254. spread is compressed (sd 1.428 vs 5.764). struggled.
+  A24: KS 0.244. spread is compressed (sd 0.4816 vs 13.78). struggled.
+  A59: KS 0.239. spread is compressed (sd 1.446 vs 12.26). zero share 0.0% synthetic vs 45.9% real. negative share 30.2% synthetic vs 6.3% real. struggled.
+  A25: KS 0.234. spread is compressed (sd 0.6802 vs 24.63). negative share 13.5% synthetic vs 30.2% real. struggled.
+  A48: KS 0.234. spread is compressed (sd 0.2047 vs 15.32). negative share 34.0% synthetic vs 55.3% real. struggled.
+  A20: KS 0.231. spread is compressed (sd 63.28 vs 431.8). struggled.
+  A63: KS 0.229. spread is compressed (sd 6.435 vs 66.96). struggled.
+  A32: KS 0.224. spread is compressed (sd 349.3 vs 1.385e+05). negative share 22.3% synthetic vs 0.1% real. struggled.
+  A35: KS 0.205. spread is compressed (sd 0.2512 vs 12.19). negative share 30.4% synthetic vs 47.7% real. struggled.
+  A33: KS 0.192. spread is compressed (sd 8.434 vs 96.95). struggled.
+  A7: KS 0.190. spread is compressed (sd 0.2834 vs 13.23). struggled.
+  A28: KS 0.181. spread is compressed (sd 10.26 vs 36.84). struggled.
+  A49: KS 0.163. spread is compressed (sd 0.3175 vs 14.74). negative share 65.0% synthetic vs 54.7% real. struggled.
+  A29: KS 0.129. centre is higher (4.046 vs 3.805).
+  A15: KS 0.127. spread is compressed (sd 1.106e+04 vs 6.14e+04).
+  A14: KS 0.113. spread is compressed (sd 0.3174 vs 13.23).
+  A41: KS 0.108. spread is compressed (sd 1.468 vs 8.406). negative share 46.3% synthetic vs 35.5% real.
+  A2: KS 0.091. spread is compressed (sd 0.4442 vs 22.34).
+  A3: KS 0.085. spread is compressed (sd 0.4354 vs 22.27).
+  A9: KS 0.085. spread is compressed (sd 1.029 vs 3.782).
+  A10: KS 0.064. spread is compressed (sd 0.6555 vs 23.68).
+  cohort: TVD 0.552. struggled.

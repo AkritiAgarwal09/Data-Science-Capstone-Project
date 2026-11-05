@@ -1,0 +1,562 @@
+{
+  "dataset": "polish",
+  "horizon": "3year",
+  "imputation_fit_on": "pooled training split; this run only filtered rows afterwards",
+  "settings_version": "v2",
+  "settings_source": "bank v2",
+  "input": "data/interim/polish/train_cleaned.csv",
+  "rows": 6194,
+  "positive_count": 294,
+  "negative_count": 5900,
+  "class_gap": 5606,
+  "target": "bankrupt",
+  "target_value": 1,
+  "discrete": [
+    "cohort"
+  ],
+  "epochs": 300,
+  "batch_size": 500,
+  "pac": 5,
+  "discriminator_steps": 3,
+  "generator_dim": [
+    256,
+    256
+  ],
+  "discriminator_dim": [
+    256,
+    256
+  ],
+  "device": "cpu",
+  "seed": 42,
+  "conditional": false,
+  "rake_columns": [
+    "cohort"
+  ],
+  "rules_applied": [
+    "ratios_numeric",
+    "target_binary",
+    "cohort_label"
+  ],
+  "sampling": "unconditional, rows with bankrupt=1 kept, discrete columns raked to the real minority shares, 3 documented consistency rules applied",
+  "train_seconds": 663.4,
+  "sampled_rows": 60000,
+  "outputs": {
+    "fill10": "data/interim/polish/synthetic/polish_3year_ctgan_v2_fill10.csv",
+    "fill25": "data/interim/polish/synthetic/polish_3year_ctgan_v2_fill25.csv",
+    "fill50": "data/interim/polish/synthetic/polish_3year_ctgan_v2_fill50.csv"
+  },
+  "model": "eda/ctgan_polish/artifacts_v2_3year/ctgan_polish_3year_v2.pkl",
+  "losses": "eda/ctgan_polish/artifacts_v2_3year/ctgan_losses.csv",
+  "recipe": "bank v2",
+  "validation_and_test_read": false,
+  "selection": {
+    "status": "selected",
+    "generator": "wgan_gp",
+    "trainable": false,
+    "fallback": "ctgan",
+    "comparator": "ctgan",
+    "scope": "",
+    "rationale": "Every feature is numeric, so WGAN-GP is selected. Documented fallback is CTGAN.",
+    "trained": "ctgan",
+    "override": "CTGAN was trained as the documented comparator (rule PB-3) because WGAN-GP, the rule's choice for an all-numeric table, is not implemented.",
+    "steps": [
+      {
+        "rule": "dcgan_excluded",
+        "outcome": "EXCLUDED",
+        "rationale": "DCGAN is an image generator and is excluded for tabular data.",
+        "inputs": {
+          "dataset": "polish",
+          "rows": 6194,
+          "minority_count": 294,
+          "minority_rate": 0.047465288989344524
+        }
+      },
+      {
+        "rule": "size_gate",
+        "outcome": "PASS",
+        "rationale": "Training rows 6194 meet min_rows 2000.",
+        "inputs": {
+          "dataset": "polish",
+          "rows": 6194,
+          "minority_count": 294,
+          "minority_rate": 0.047465288989344524,
+          "min_rows": 2000
+        }
+      },
+      {
+        "rule": "horizon_gate",
+        "outcome": "PASS",
+        "rationale": "One horizon, or this dataset has no horizon files.",
+        "inputs": {
+          "dataset": "polish",
+          "rows": 6194,
+          "minority_count": 294,
+          "minority_rate": 0.047465288989344524
+        }
+      },
+      {
+        "rule": "missing_gate",
+        "outcome": "PASS",
+        "rationale": "No unresolved missing values remain in the generator table.",
+        "inputs": {
+          "dataset": "polish",
+          "rows": 6194,
+          "minority_count": 294,
+          "minority_rate": 0.047465288989344524
+        }
+      },
+      {
+        "rule": "leakage_gate",
+        "outcome": "PASS",
+        "rationale": "No listed leakage column is in the generator table.",
+        "inputs": {
+          "dataset": "polish",
+          "rows": 6194,
+          "minority_count": 294,
+          "minority_rate": 0.047465288989344524
+        }
+      },
+      {
+        "rule": "minority_gate",
+        "outcome": "FORBIDDEN_CLASS_ONLY",
+        "rationale": "Minority count 294 is below 500, so a class-only generator is forbidden. Conditional selection continues.",
+        "inputs": {
+          "dataset": "polish",
+          "rows": 6194,
+          "minority_count": 294,
+          "minority_rate": 0.047465288989344524,
+          "minority_min": 500
+        }
+      },
+      {
+        "rule": "temporal_test",
+        "outcome": "FAIL",
+        "rationale": "Temporal test failed on entity_key, time_index, min_steps, repeated_observation. TimeGAN is not selected.",
+        "inputs": {
+          "dataset": "polish",
+          "rows": 6194,
+          "minority_count": 294,
+          "minority_rate": 0.047465288989344524,
+          "entity_key": "FAIL",
+          "time_index": "FAIL",
+          "min_steps": "FAIL",
+          "repeated_observation": "FAIL",
+          "wide_steps": null
+        }
+      },
+      {
+        "rule": "type_routing",
+        "outcome": "SELECTED",
+        "rationale": "Every feature is numeric, so WGAN-GP is selected. Documented fallback is CTGAN.",
+        "inputs": {
+          "dataset": "polish",
+          "rows": 6194,
+          "minority_count": 294,
+          "minority_rate": 0.047465288989344524,
+          "numeric": 64,
+          "categorical": 0,
+          "binary": 0,
+          "generator": "wgan_gp"
+        }
+      },
+      {
+        "rule": "fallback",
+        "outcome": "DOCUMENTED",
+        "rationale": "WGAN-GP is not implemented. Documented fallback is CTGAN.",
+        "inputs": {
+          "dataset": "polish",
+          "rows": 6194,
+          "minority_count": 294,
+          "minority_rate": 0.047465288989344524,
+          "fallback": "ctgan"
+        }
+      }
+    ]
+  },
+  "out_of_range_before_clip": {
+    "A1": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 61104
+    },
+    "A2": {
+      "below": 0.017691149515579995,
+      "above": 0.0,
+      "outside": 0.017691149515579995,
+      "rows": 61104
+    },
+    "A3": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 61104
+    },
+    "A4": {
+      "below": 0.4333104215763289,
+      "above": 0.0,
+      "outside": 0.4333104215763289,
+      "rows": 61104
+    },
+    "A5": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 61104
+    },
+    "A6": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 61104
+    },
+    "A7": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 61104
+    },
+    "A8": {
+      "below": 0.12604739460591777,
+      "above": 0.0,
+      "outside": 0.12604739460591777,
+      "rows": 61104
+    },
+    "A9": {
+      "below": 0.001931133804660906,
+      "above": 0.0,
+      "outside": 0.001931133804660906,
+      "rows": 61104
+    },
+    "A10": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 61104
+    },
+    "A11": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 61104
+    },
+    "A12": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 61104
+    },
+    "A13": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 61104
+    },
+    "A14": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 61104
+    },
+    "A15": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 61104
+    },
+    "A16": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 61104
+    },
+    "A17": {
+      "below": 0.10739067818800734,
+      "above": 0.0,
+      "outside": 0.10739067818800734,
+      "rows": 61104
+    },
+    "A18": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 61104
+    },
+    "A19": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 61104
+    },
+    "A20": {
+      "below": 0.0942000523697303,
+      "above": 0.0,
+      "outside": 0.0942000523697303,
+      "rows": 61104
+    },
+    "A21": {
+      "below": 0.18074103168368683,
+      "above": 0.0,
+      "outside": 0.18074103168368683,
+      "rows": 61104
+    },
+    "A22": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 61104
+    },
+    "A23": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 61104
+    },
+    "A24": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 61104
+    },
+    "A25": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 61104
+    },
+    "A26": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 61104
+    },
+    "A27": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 61104
+    },
+    "A28": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 61104
+    },
+    "A29": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 61104
+    },
+    "A30": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 61104
+    },
+    "A31": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 61104
+    },
+    "A32": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 61104
+    },
+    "A33": {
+      "below": 0.0009328358208955224,
+      "above": 0.0,
+      "outside": 0.0009328358208955224,
+      "rows": 61104
+    },
+    "A34": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 61104
+    },
+    "A35": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 61104
+    },
+    "A36": {
+      "below": 0.013534302173343808,
+      "above": 0.0,
+      "outside": 0.013534302173343808,
+      "rows": 61104
+    },
+    "A37": {
+      "below": 0.43036462424718513,
+      "above": 0.0,
+      "outside": 0.43036462424718513,
+      "rows": 61104
+    },
+    "A38": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 61104
+    },
+    "A39": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 61104
+    },
+    "A40": {
+      "below": 1.6365540717465306e-05,
+      "above": 0.0,
+      "outside": 1.6365540717465306e-05,
+      "rows": 61104
+    },
+    "A41": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 61104
+    },
+    "A42": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 61104
+    },
+    "A43": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 61104
+    },
+    "A44": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 61104
+    },
+    "A45": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 61104
+    },
+    "A46": {
+      "below": 0.12017216548834773,
+      "above": 0.0,
+      "outside": 0.12017216548834773,
+      "rows": 61104
+    },
+    "A47": {
+      "below": 0.6667975909924064,
+      "above": 0.0,
+      "outside": 0.6667975909924064,
+      "rows": 61104
+    },
+    "A48": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 61104
+    },
+    "A49": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 61104
+    },
+    "A50": {
+      "below": 0.1189611154752553,
+      "above": 0.0,
+      "outside": 0.1189611154752553,
+      "rows": 61104
+    },
+    "A51": {
+      "below": 0.04317229641267348,
+      "above": 0.0,
+      "outside": 0.04317229641267348,
+      "rows": 61104
+    },
+    "A52": {
+      "below": 0.12771667975909923,
+      "above": 0.0,
+      "outside": 0.12771667975909923,
+      "rows": 61104
+    },
+    "A53": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 61104
+    },
+    "A54": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 61104
+    },
+    "A55": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 61104
+    },
+    "A56": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 61104
+    },
+    "A57": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 61104
+    },
+    "A58": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 61104
+    },
+    "A59": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 61104
+    },
+    "A60": {
+      "below": 0.15375425504058654,
+      "above": 0.0,
+      "outside": 0.15375425504058654,
+      "rows": 61104
+    },
+    "A61": {
+      "below": 0.0974567949725059,
+      "above": 0.0,
+      "outside": 0.0974567949725059,
+      "rows": 61104
+    },
+    "A62": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 61104
+    },
+    "A63": {
+      "below": 0.047361874836344596,
+      "above": 0.0,
+      "outside": 0.047361874836344596,
+      "rows": 61104
+    },
+    "A64": {
+      "below": 0.42484943702539935,
+      "above": 0.0,
+      "outside": 0.42484943702539935,
+      "rows": 61104
+    }
+  }
+}

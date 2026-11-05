@@ -1,0 +1,90 @@
+Default CTGAN diagnostics
+settings: v1, epochs 300, batch 500, pac 10, discriminator steps 1, seed 42, device cpu
+sampling: conditional on y=1
+selection rule: selected, generator timegan, trainable False, fallback ctgan
+  All four temporal conditions passed. TimeGAN covers the monthly block only.
+  override: CTGAN was trained as the documented fallback (rule DC-4, CTGAN on the flattened wide table) because TimeGAN is not implemented. The rule's choice is TimeGAN for monthly payment, bill, and payment-amount variables only.
+  deciding steps: temporal_test PASS; type_routing NOT_REACHED; fallback DOCUMENTED
+training seconds: 503.5
+comparison: synthetic fill50 vs real training rows with y=1
+real minority rows: 3,982
+synthetic rows: 5,018
+
+Numeric columns
+  LIMIT_BAL: mean 1.296e+05 vs 1.413e+05; sd 1.157e+05 vs 1.244e+05; median 9e+04 vs 1.194e+05; KS 0.106
+  AGE: mean 35.53 vs 34.34; sd 9.581 vs 7.894; median 34 vs 34; KS 0.094
+  BILL_AMT1: mean 4.853e+04 vs 5.605e+04; sd 7.25e+04 vs 9.236e+04; median 2.101e+04 vs 1.578e+04; KS 0.084
+  BILL_AMT2: mean 4.724e+04 vs 5.411e+04; sd 7.041e+04 vs 9.326e+04; median 2.072e+04 vs 1.356e+04; KS 0.116
+  BILL_AMT3: mean 4.514e+04 vs 5.233e+04; sd 6.73e+04 vs 8.402e+04; median 2.012e+04 vs 1.658e+04; KS 0.098
+  BILL_AMT4: mean 4.212e+04 vs 5.004e+04; sd 6.377e+04 vs 8.605e+04; median 1.931e+04 vs 1.507e+04; KS 0.082
+  BILL_AMT5: mean 3.975e+04 vs 4.543e+04; sd 6.111e+04 vs 7.64e+04; median 1.895e+04 vs 1.388e+04; KS 0.101
+  BILL_AMT6: mean 3.847e+04 vs 3.083e+04; sd 5.876e+04 vs 5.244e+04; median 1.84e+04 vs 6296; KS 0.228
+  PAY_AMT1: mean 3553 vs 5046; sd 1.108e+04 vs 9537; median 1652 vs 1659; KS 0.225
+  PAY_AMT2: mean 3339 vs 4528; sd 1.028e+04 vs 9796; median 1577 vs 1286; KS 0.150
+  PAY_AMT3: mean 3486 vs 3005; sd 1.39e+04 vs 8756; median 1277 vs 481.5; KS 0.232
+  PAY_AMT4: mean 3312 vs 3053; sd 1.213e+04 vs 7928; median 1000 vs 660; KS 0.216
+  PAY_AMT5: mean 3418 vs 3155; sd 1.371e+04 vs 1.064e+04; median 1000 vs 356; KS 0.187
+  PAY_AMT6: mean 3531 vs 6227; sd 1.347e+04 vs 2.007e+04; median 1000 vs 1058; KS 0.187
+
+Discrete columns (total variation distance)
+  SEX: TVD 0.355
+  EDUCATION: TVD 0.284
+  MARRIAGE: TVD 0.026
+  PAY_1: TVD 0.032
+  PAY_2: TVD 0.090
+  PAY_3: TVD 0.158
+  PAY_4: TVD 0.173
+  PAY_5: TVD 0.178
+  PAY_6: TVD 0.172
+
+Mean absolute correlation difference: 0.078
+
+Invalid category codes: none. Every discrete code appears in the real training data.
+
+Payment status, share of rows with a delay code of 1 or more:
+  PAY_1: real minority 52.3%, synthetic 51.7%
+  PAY_2: real minority 37.6%, synthetic 35.3%
+  PAY_3: real minority 33.2%, synthetic 32.6%
+  PAY_4: real minority 28.8%, synthetic 38.1%
+  PAY_5: real minority 25.2%, synthetic 28.9%
+  PAY_6: real minority 25.1%, synthetic 25.9%
+The most recent status, PAY_1, is close to the real default rows. Earlier months are listed above so a flat or drifting history is visible.
+
+Values outside the training range before clipping
+  share of 21,798 on-target draws per column; the written files are clipped, so this is the only place the overshoot is visible (rule PB-7)
+  source: re-sampled 20,000 on-target rows from the saved model after the run; the written files came from the original sampling pass
+  PAY_AMT3: 26.9% outside (below 26.9%, above 0.0%)
+  PAY_AMT5: 26.3% outside (below 26.3%, above 0.0%)
+  PAY_AMT2: 12.6% outside (below 12.6%, above 0.0%)
+  PAY_AMT6: 11.7% outside (below 11.7%, above 0.0%)
+  PAY_AMT4: 7.5% outside (below 7.5%, above 0.0%)
+  PAY_AMT1: 6.3% outside (below 6.3%, above 0.0%)
+  LIMIT_BAL: 1.2% outside (below 1.2%, above 0.0%)
+
+Columns that struggled
+Numeric columns are ranked by KS and discrete columns by TVD. A numeric column is marked as struggling at KS 0.15 or higher, and a discrete column at TVD 0.10 or higher. If nothing crosses the line, the largest gap is still listed without the struggled mark.
+Numeric, worst first:
+  PAY_AMT3: KS 0.232. spread is compressed (synthetic sd 8756, real sd 1.39e+04). 26.9% of synthetic values sit on the real min or max. struggled.
+  BILL_AMT6: KS 0.228. share at zero is 0.0% synthetic vs 14.0% real minority. negative share is 24.4% synthetic vs 1.7% real minority. struggled.
+  PAY_AMT1: KS 0.225. share at zero is 6.0% synthetic vs 27.9% real minority. 6.0% of synthetic values sit on the real min or max. struggled.
+  PAY_AMT4: KS 0.216. spread is compressed (synthetic sd 7928, real sd 1.213e+04). share at zero is 7.9% synthetic vs 29.3% real minority. 7.9% of synthetic values sit on the real min or max. struggled.
+  PAY_AMT5: KS 0.187. 26.5% of synthetic values sit on the real min or max. struggled.
+  PAY_AMT6: KS 0.187. spread is wider (synthetic sd 2.007e+04, real sd 1.347e+04). share at zero is 12.5% synthetic vs 31.0% real minority. 12.5% of synthetic values sit on the real min or max. struggled.
+  PAY_AMT2: KS 0.150. share at zero is 12.2% synthetic vs 26.6% real minority. 12.2% of synthetic values sit on the real min or max. struggled.
+  BILL_AMT2: KS 0.116. spread is wider (synthetic sd 9.326e+04, real sd 7.041e+04).
+  LIMIT_BAL: KS 0.106.
+  BILL_AMT5: KS 0.101. share at zero is 0.0% synthetic vs 12.7% real minority.
+  BILL_AMT3: KS 0.098. share at zero is 0.0% synthetic vs 10.1% real minority.
+  AGE: KS 0.094.
+  BILL_AMT1: KS 0.084.
+  BILL_AMT4: KS 0.082. spread is wider (synthetic sd 8.605e+04, real sd 6.377e+04). share at zero is 0.0% synthetic vs 11.3% real minority.
+Discrete, worst first:
+  SEX: TVD 0.355. Largest share gap is code 2: synthetic 20.5%, real minority 56.0%. struggled.
+  EDUCATION: TVD 0.284. Largest share gap is code 1: synthetic 59.0%, real minority 30.8%. struggled.
+  PAY_5: TVD 0.178. Largest share gap is code 0: synthetic 35.6%, real minority 48.1%. struggled.
+  PAY_4: TVD 0.173. Largest share gap is code 0: synthetic 29.6%, real minority 46.1%. struggled.
+  PAY_6: TVD 0.172. Largest share gap is code 0: synthetic 35.1%, real minority 46.1%. struggled.
+  PAY_3: TVD 0.158. Largest share gap is code 2: synthetic 21.4%, real minority 29.5%. struggled.
+  PAY_2: TVD 0.090. Largest share gap is code 2: synthetic 25.8%, real minority 33.2%.
+  PAY_1: TVD 0.032. Largest share gap is code 0: synthetic 29.8%, real minority 28.2%.
+  MARRIAGE: TVD 0.026. Largest share gap is code 1: synthetic 50.4%, real minority 48.0%.

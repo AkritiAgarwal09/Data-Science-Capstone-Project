@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 import pandas as pd
 
 from agentic_gan.orchestrator.decisions import log_decision
@@ -37,27 +39,31 @@ PRIVACY_TOKENS = ("dcr", "duplicate", "privacy")
 HORIZON_LABEL = "cohort"
 
 
-def describe_characteristics(
-    train: pd.DataFrame, request: ModelSelectionInput
+def measure_training_frame(
+    train: pd.DataFrame,
+    dataset: str,
+    target: str,
+    positive: object,
+    excluded_features: Sequence[str] = (),
 ) -> DataCharacteristics:
-    """Measure the training table. Do not infer a sequence from a column name."""
-    dataset = request.config.dataset_name
+    """Measure a cleaned training table the way the agent does, with no run config.
+
+    The EDA runners call this too, so a standalone CTGAN run records the same selection the
+    agent would have made. Do not infer a sequence from a column name.
+    """
     facts = temporal_facts(dataset, set(train.columns))
     pooled = _horizons_pooled(dataset, train)
     hidden = {"source_row"}
     if dataset == "polish" and HORIZON_LABEL in train.columns and not pooled:
         hidden.add(HORIZON_LABEL)
     discrete = set(DATASETS[dataset].discrete) if dataset in DATASETS else set()
-    leakage_names = tuple(dict.fromkeys((*facts.leakage, *request.config.excluded_features)))
+    leakage_names = tuple(dict.fromkeys((*facts.leakage, *excluded_features)))
     columns = tuple(
         ColumnSpec(name, _kind(name, train[name], discrete), int(train[name].isna().sum()))
         for name in train.columns
         if name not in hidden
     )
-    target = request.config.target
-    positive = _positive_class(request.config.positive_class, train[target])
     positives = int(train[target].eq(positive).sum())
-    _check_class_counts(train, target, positive, positives, request)
     rows = len(train)
     return DataCharacteristics(
         dataset=dataset,
@@ -74,6 +80,23 @@ def describe_characteristics(
         leaky_columns=tuple(name for name in leakage_names if name in train.columns),
         horizons_pooled=pooled,
     )
+
+
+def describe_characteristics(
+    train: pd.DataFrame, request: ModelSelectionInput
+) -> DataCharacteristics:
+    """Measure the training table and check it against the baseline class counts."""
+    target = request.config.target
+    positive = _positive_class(request.config.positive_class, train[target])
+    described = measure_training_frame(
+        train,
+        request.config.dataset_name,
+        target,
+        positive,
+        request.config.excluded_features,
+    )
+    _check_class_counts(train, target, positive, described.minority_count, request)
+    return described
 
 
 def run_model_selection(request: ModelSelectionInput, run: RunDir) -> GeneratorOutput:

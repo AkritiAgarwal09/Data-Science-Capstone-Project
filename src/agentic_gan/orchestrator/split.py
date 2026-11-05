@@ -4,15 +4,18 @@ The split is made once, before any cleaning (architecture.md section 2). It foll
 already used for the EDA row-ID files and the baselines: two stratified steps with a fixed seed,
 so every script and the orchestrator put the same rows in each part.
 
-dataset_path must be a comma-separated CSV with a header row that includes the target column.
-Other source formats are converted to that by the dataset loaders (issue #29).
+The shared dataset loader handles the four configured source formats.
 """
+
+from dataclasses import replace
 
 import pandas as pd
 from sklearn.model_selection import train_test_split
 
 from agentic_gan.orchestrator.manifest import RunDir
 from agentic_gan.schemas import RunConfig, SplitOutput, Status
+from agentic_gan.tools.preprocessing import load_dataset, split_dataset
+from agentic_gan.utils.datasets import DATASETS
 
 # Each class needs a row in all three parts, so three is the least that can be split.
 MIN_CLASS_ROWS = 3
@@ -33,7 +36,7 @@ def validate_schema(config: RunConfig, df: pd.DataFrame) -> None:
     duplicated = df.columns[df.columns.duplicated()].unique().tolist()
     if duplicated:
         problems.append(f"duplicate column names: {duplicated}")
-    empty = df.columns[df.isna().all()].tolist()
+    empty = df.columns[df.isna().all()].tolist() if config.dataset_name != "ieee_cis" else []
     if empty:
         problems.append(f"columns with no values: {empty}")
 
@@ -100,17 +103,24 @@ def split_row_ids(config: RunConfig, df: pd.DataFrame) -> dict[str, pd.Index]:
 def split_data(config: RunConfig, run: RunDir) -> SplitOutput:
     """Validate the dataset, split it, and write train.csv, val.csv and test.csv to data/.
 
-    Rows keep every source column and no index column is added. Nothing is written if the
-    dataset fails validation.
+    Rows keep every source column and a source_row provenance column. Nothing is written
+    if the dataset fails validation.
     """
-    df = pd.read_csv(config.dataset_path)
+    source = DATASETS.get(config.dataset_name)
+    if source and source.split.get("strategy") == "time":
+        source = replace(source, sample={**source.sample, "seed": config.split_seed})
+    df = load_dataset(source, config.dataset_path) if source else pd.read_csv(config.dataset_path)
     validate_schema(config, df)
-    ids = split_row_ids(config, df)
+    if source and source.split.get("strategy") == "time":
+        ids = split_dataset(df, source)
+        ids = {"train": ids["train"], "val": ids["validation"], "test": ids["test"]}
+    else:
+        ids = split_row_ids(config, df)
 
     paths, warnings = {}, []
     for part, index in ids.items():
         paths[part] = run.subdir("data") / f"{part}.csv"
-        df.loc[index].to_csv(paths[part], index=False)
+        df.loc[index].to_csv(paths[part], index_label="source_row")
         positives = int((df.loc[index, config.target] == config.positive_class).sum())
         if positives < WARN_BELOW_POSITIVES:
             warnings.append(f"{part} has only {positives} positives, so its metrics will be noisy")
@@ -126,4 +136,56 @@ def split_data(config: RunConfig, run: RunDir) -> SplitOutput:
         seed=config.split_seed,
         train_positives=int(train_positive.sum()),
         train_negatives=int((~train_positive).sum()),
+    )
+
+
+def split_for_training(config: RunConfig, run: RunDir) -> SplitOutput:
+    """Dataset-aware split with stable source IDs and the frozen baseline recipe.
+
+    Retains the source features, including leakage columns, for auditing. The next
+    stage excludes them. IEEE uses the configured time cuts and training sample.
+    """
+    from dataclasses import replace
+
+    from agentic_gan.tools.preprocessing import load_dataset, normalize, split_dataset
+    from agentic_gan.utils.datasets import load_configs
+
+    dataset = load_configs()[config.dataset_name]
+    if config.target != dataset.target:
+        raise SchemaError("Run target differs from the dataset configuration")
+    dataset = replace(
+        dataset,
+        split={
+            **dataset.split,
+            "seed": config.split_seed,
+            "train": config.split_ratios.train,
+            "validation": config.split_ratios.val,
+            "test": config.split_ratios.test,
+        },
+    )
+    data = load_dataset(dataset, config.dataset_path)
+    if "source_row" in data or "is_synthetic" in data:
+        raise SchemaError("Source data contains reserved provenance columns")
+    normalized = normalize(data, dataset, dataset.include_duration)
+    if normalized[config.target].nunique() != 2:
+        raise SchemaError("Source target must contain both classes")
+    ids = split_dataset(data if dataset.name == "ieee_cis" else normalized, dataset)
+    paths, warnings = {}, []
+    for part, rows in ids.items():
+        name = "val" if part == "validation" else part
+        path = run.subdir("data") / f"{name}.csv"
+        data.loc[rows].to_csv(path, index_label="source_row")
+        paths[f"{name}_path"] = path
+        positives = int(normalized.loc[rows, config.target].sum())
+        if positives < WARN_BELOW_POSITIVES:
+            warnings.append(f"{name} has only {positives} positives, so its metrics will be noisy")
+    positives = int(normalized.loc[ids["train"], config.target].sum())
+    return SplitOutput(
+        status=Status.SUCCESS,
+        warnings=warnings,
+        **paths,
+        target=config.target,
+        seed=config.split_seed,
+        train_positives=positives,
+        train_negatives=len(ids["train"]) - positives,
     )
