@@ -31,6 +31,10 @@ the allowed set, and values outside bounds trigger one retry, then the fixed fal
 A changed rule hash raises `RuleOverrideError` and is logged; it never becomes an
 accepted answer.
 
+Mark a test that calls the real model with `@pytest.mark.live`. Live tests are deselected by
+default (`addopts` in `pyproject.toml`); run them with `uv run pytest -m live` once the Vertex
+setup below works. Use at most one per agent.
+
 ## Vertex setup
 
 From the repo root, install the locked dependencies with `uv sync`. Export the team
