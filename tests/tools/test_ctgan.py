@@ -46,7 +46,7 @@ def test_sample_minority_flagged(trained):
 
 
 def test_unconditional_sample_still_keeps_target(trained):
-    out = sample_synthetic(trained, 20, target_value=1, seed=1, conditional=False)
+    out = _ctgan().sample_synthetic(trained, 20, target_value=1, seed=1, conditional=False)
     assert len(out) == 20
     assert (out["y"] == 1).all()
 
@@ -94,7 +94,7 @@ def test_unconditional_sampling_keeps_only_target_rows(trained):
 
 def test_range_report_counts_draws_outside_the_training_range(trained):
     report: dict = {}
-    out = sample_synthetic(trained, 30, seed=3, range_report=report)
+    out = _ctgan().sample_synthetic(trained, 30, seed=3, range_report=report)
     assert len(out) == 30
     assert set(report) == set(trained.numeric_ranges) == {"age", "income"}
     for stats in report.values():
@@ -108,5 +108,5 @@ def test_range_report_counts_draws_outside_the_training_range(trained):
 
 
 def test_range_report_is_optional(trained):
-    out = sample_synthetic(trained, 10, seed=3)
+    out = _ctgan().sample_synthetic(trained, 10, seed=3)
     assert len(out) == 10
