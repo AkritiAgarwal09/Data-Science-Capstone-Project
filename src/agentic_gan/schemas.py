@@ -425,6 +425,7 @@ class ModelRecord(Outcome):
     threshold: float | None = Field(None, ge=0, le=1)
     protocol_id: str | None = None
     selected: bool = False
+    validation_probability_range: float | None = Field(None, ge=0, le=1)
     training_rows: int | None = Field(None, ge=1)
     synthetic_rows: int = Field(0, ge=0)
     val_metrics: dict[str, float] = Field(default_factory=dict)

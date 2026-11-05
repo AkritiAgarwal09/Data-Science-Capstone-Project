@@ -531,6 +531,26 @@ def test_orchestrator_passes_only_quality_accepted_levels(experiment):
     assert run.load_manifest().verify(run) == []
 
 
+def test_constant_validation_scores_cannot_win_on_trapezoidal_pr_auc(experiment):
+    request, run, *_ = experiment
+    result = training.run_training(request.updated(config=request.config.updated(seeds=[42])), run)
+    for arm in (Arm.RAW, Arm.BASELINE, Arm.SMOTE, Arm.GAN):
+        records = [r for r in result.records if r.arm is arm]
+        constants = [r for r in records if r.model == "Dummy"]
+        assert constants and all(r.validation_probability_range == 0 for r in constants)
+        assert all(r.status is Status.SUCCESS and not r.selected for r in constants)
+        assert all(r.model_path.is_file() for r in constants)
+    varied = next(r for r in result.records if r.model == "Logistic")
+    constant = next(r for r in result.records if r.model == "Dummy")
+    # Even an apparently perfect area cannot make constant scores eligible.
+    constant = constant.updated(val_metrics={**constant.val_metrics, "pr_auc": 1.0})
+    group = training._select_group([constant, varied])
+    assert not group[0].selected and group[1].selected
+    assert not training._select_group([constant])[0].selected
+    metrics = pd.read_csv(result.metrics_path)
+    assert not metrics.loc[metrics.model.eq("Dummy"), "selection_eligible"].any()
+
+
 # --- LLM run plan -------------------------------------------------------------------------
 
 PROTOCOL = {"protocol_id": "p1", "thresholds": {"A": 0.3}, "models": {"A": {}}}
@@ -690,6 +710,11 @@ def test_run_trains_only_what_the_plan_allows(planning):
     result, fake, metrics = _run_with_plan(request, run, quality, [_plan()])
     assert result.status is Status.SUCCESS
     assert len(fake.calls) == 2  # the plan, then the summary
+    constants = [record for record in result.records if record.model == "Dummy"]
+    assert constants and all(record.validation_probability_range == 0 for record in constants)
+    assert all(not record.selected for record in constants)
+    assert any("constant validation scores" in warning for warning in result.warnings)
+    assert not metrics.loc[metrics.model.eq("Dummy"), "selection_eligible"].any()
     assert set(metrics.seed) == {42}
     assert set(metrics.query("arm == 'smotenc'").fill_level) == {0.25}
     assert set(metrics.query("arm == 'ctgan'").fill_level) == {0.5}

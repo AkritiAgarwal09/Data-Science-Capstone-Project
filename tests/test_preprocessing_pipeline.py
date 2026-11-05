@@ -101,7 +101,9 @@ def test_default_graph_uses_real_split_repair_and_training(tmp_path, monkeypatch
         graph, "run_evaluation", lambda req, run: run_evaluation(req, run, client=FakeLLM([]))
     )
     monkeypatch.setattr(graph, "preprocess", fake_preprocess)
-    state, run = graph.run_pipeline(request.config, runs_dir=tmp_path / "pipeline_runs")
+    # Exercise the CLI's relative run root through every real stage and the manifest.
+    monkeypatch.chdir(tmp_path)
+    state, run = graph.run_pipeline(request.config, runs_dir="pipeline_runs")
     assert state.is_complete, run.decisions_path.read_text()
     assert len(observed) == 1
     assert (
