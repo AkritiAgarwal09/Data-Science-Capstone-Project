@@ -893,7 +893,10 @@ def _retry_lines(run):
 
 def test_an_accepted_proposal_logs_one_retry_line_from_the_llm(tmp_path, gan):
     request, run, _path = _retry_request(tmp_path, {"epochs": (100, 600)}, "column_distance")
-    run_model_selection(request, run, client=FakeLLM([PROPOSAL]))
+    fake = FakeLLM([PROPOSAL])
+    run_model_selection(request, run, client=fake)
+    assert len(fake.calls) == 1
+    assert fake.calls[0][2] is RetrySettings
     lines = _retry_lines(run)
     assert len(lines) == 1
     line = lines.iloc[0]
@@ -914,7 +917,10 @@ def test_an_accepted_proposal_logs_one_retry_line_from_the_llm(tmp_path, gan):
 def test_a_fallback_logs_one_retry_line_from_the_rule(tmp_path, gan):
     bad = {**PROPOSAL, "epochs": 900}
     request, run, _path = _retry_request(tmp_path, {"epochs": (100, 600)}, "column_distance")
-    run_model_selection(request, run, client=FakeLLM([bad, bad]))
+    fake = FakeLLM([bad, bad])
+    run_model_selection(request, run, client=fake)
+    assert len(fake.calls) == 2  # both scripted answers are out of bounds
+    assert _logged(run, "llm_step") == "LLM_FALLBACK"
     lines = _retry_lines(run)
     assert len(lines) == 1
     line = lines.iloc[0]
@@ -951,7 +957,9 @@ def test_unsupported_adjustments_are_reported_once_and_not_applied(tmp_path, gan
     request, run, _path = _request(
         tmp_path, config, _bank_frame(), 500, 1500, attempt=2, previous=report,
     )
-    run_model_selection(request, run, client=FakeLLM([PROPOSAL]))
+    fake = FakeLLM([PROPOSAL])
+    run_model_selection(request, run, client=fake)
+    assert len(fake.calls) == 1
     decisions = read_decisions(run)
     unsupported = decisions.query("rule == 'unsupported_adjustment'")
     assert len(unsupported) == 1
@@ -1076,7 +1084,7 @@ def test_an_impossible_batch_snap_is_rejected_and_logged(tmp_path, gan):
     assert _retry_lines(run).iloc[0].inputs["source"] == "rule"
 
 
-@pytest.mark.parametrize("check", ["dcr_ratio", "exact_train_copies"])
+@pytest.mark.parametrize("check", sorted(PRIVACY_CHECKS))
 def test_a_privacy_failure_rejects_raising_epochs(tmp_path, gan, check):
     raised = _answer(epochs=500)
     fake = FakeLLM([raised, raised])
@@ -1153,13 +1161,18 @@ def test_attempt_2_writes_exactly_one_retry_line(tmp_path, gan):
     changed, run, _path = _retry_request(
         tmp_path, {"epochs": (100, 600)}, "column_distance", run_id="changed",
     )
-    run_model_selection(changed, run, client=FakeLLM([_answer(epochs=500)]))
+    fake_changed = FakeLLM([_answer(epochs=500)])
+    run_model_selection(changed, run, client=fake_changed)
+    assert len(fake_changed.calls) == 1
     lines = _retry_lines(run)
     assert len(lines) == 1
     assert lines.iloc[0].rule == "hyperparameter_retry"
 
     unchanged, other, _path = _retry_request(tmp_path, {}, "column_distance", run_id="unchanged")
-    run_model_selection(unchanged, other, client=FakeLLM([]))
+    fake_idle = FakeLLM([])
+    run_model_selection(unchanged, other, client=fake_idle)
+    # Empty gan_bounds pin every setting, so the proposer is not called.
+    assert len(fake_idle.calls) == 0
     idle = _retry_lines(other)
     assert len(idle) == 1
     assert idle.iloc[0].rule == "retry_unchanged"

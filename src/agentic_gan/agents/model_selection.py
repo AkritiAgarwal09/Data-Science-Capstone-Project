@@ -171,8 +171,8 @@ def run_model_selection(
 ) -> GeneratorOutput:
     """Select from the baseline training split only. Validation and test are not read.
 
-    `client` is the LLM client for the explanation step; tests pass a FakeLLM. With none, the
-    step logs LLM_FALLBACK and the rule's own rationale stands.
+    `client` serves both LLM steps: the explanation on attempt 1 and the settings proposal on a
+    retry. Tests pass a FakeLLM. With none, each step logs LLM_FALLBACK and the rule stands.
     """
     train = pd.read_csv(request.preprocess.baseline.train_path)
     if IS_SYNTHETIC in train.columns:

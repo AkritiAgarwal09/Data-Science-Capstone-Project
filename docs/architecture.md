@@ -510,7 +510,7 @@ The checks run on each synthetic set, that is, at each fill level. A level passe
 
 ## 6. Where the LLM is used
 
-Each agent has at most one LLM step, and the LLM never decides a route, a verdict, a threshold, a rule or a metric. It explains, diagnoses, plans from an allowed list, or narrates, and code checks what it returns. This section gives the model and provider (6.1), the bounded role of each agent (6.2), the guardrails every step passes through (6.3), the run narrative (6.4) and notes for adding a step (6.5). Status is as of 29 October 2026.
+Each agent has at most one LLM step per attempt. Model selection has an explain step on attempt 1 and a settings proposal on a retry. The LLM never decides a route, a verdict, a threshold, a rule or a metric. It explains, diagnoses, plans from an allowed list, or narrates, and code checks what it returns. This section gives the model and provider (6.1), the bounded role of each agent (6.2), the guardrails every step passes through (6.3), the run narrative (6.4) and notes for adding a step (6.5). Status is as of 29 October 2026.
 
 ### 6.1 Model and provider
 
@@ -573,7 +573,7 @@ For example, the narrative of a run whose first attempt used CTGAN v1 on Bank Ma
 - Limit choices with `allowed_options`, `numeric_bounds` or `Literal` types, then check the grounding of the answer in code.
 - Let the agent function take a `client=None` argument and pass it to `run_llm_step`, as `run_quality` does, so tests can inject a `FakeLLM`.
 - The rule hash is passed in by the agent. Until the orchestrator's lock exists (#78), `run_quality` hashes `quality_gate`, `sanity_rules` and `gan_bounds` itself, and each new step should use the shared function once it exists.
-- Model selection hashes `min_rows`, `gan_bounds`, the step order and its defaults itself (a local `_rule_hash`), because importing `graph.rule_hash` would be circular.
+- Model selection hashes `min_rows`, `gan_bounds`, the step order, `CTGAN_DEFAULTS`, `EPOCH_STEP` and `PRIVACY_CHECKS` itself (a local `_rule_hash`), because importing `graph.rule_hash` would be circular.
 - Put a summary in the prompt, never rows (6.3, item 7).
 
 ## 7. Handoff contracts
