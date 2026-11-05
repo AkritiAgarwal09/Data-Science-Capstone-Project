@@ -417,3 +417,13 @@ def test_a_run_can_be_audited_after_it_finishes(run):
 
     write(run, "data/train.csv", "changed after the run")
     assert [p.kind for p in reloaded_manifest.verify(run)] == ["changed"]
+
+
+
+def test_relative_runs_directory_produces_unambiguous_artifact_paths(config, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    run = create_run(config, runs_dir=Path("runs"))
+    assert run.root.is_absolute()
+    artifact = run.subdir("data") / "train.csv"
+    assert run.relative(artifact) == Path("data/train.csv")
+    assert run.relative(Path("data/train.csv")) == Path("data/train.csv")

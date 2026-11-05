@@ -304,3 +304,40 @@ def test_numbers_the_caller_vouches_for_are_allowed(result_files):
     report = "We trained 4 models."
     assert not verify_report_numbers(report, result_files).verified
     assert verify_report_numbers(report, result_files, allowed=[4]).verified
+
+
+def test_numeric_segment_boundaries_are_grounded_for_report_verification(tmp_path):
+    n = 24
+    data = pd.DataFrame(
+        {
+            "source_row": range(n),
+            "y_true": [0, 1] * (n // 2),
+            "probability": np.linspace(0.05, 0.95, n),
+            "prediction": [0, 1] * (n // 2),
+        }
+    )
+    features = pd.DataFrame({"source_row": range(n), "age": range(21, 21 + n)})
+    table = segment_metrics(data, features, "age")
+    path = tmp_path / "segments.csv"
+    table.to_csv(path, index=False)
+    assert table.segment_lower_bound.min() == pytest.approx(20.999)
+    assert verify_report_numbers("Age band (20.999, 26.75] is observed.", [path]).verified
+    assert not verify_report_numbers("Age band (20.998, 26.75] is observed.", [path]).verified
+    categorical = segment_metrics(data, features.assign(job="admin"), "job")
+    assert categorical.segment_lower_bound.isna().all()
+
+
+def test_missing_numeric_segment_values_are_not_a_string_nan_group():
+    n = 24
+    data = pd.DataFrame(
+        {
+            "source_row": range(n),
+            "y_true": [0, 1] * (n // 2),
+            "probability": np.linspace(0.05, 0.95, n),
+            "prediction": [0, 1] * (n // 2),
+        }
+    )
+    features = pd.DataFrame({"source_row": range(n), "age": [np.nan, *range(21, 21 + n - 1)]})
+    table = segment_metrics(data, features, "age")
+    assert table.n.sum() == n - 1
+    assert "nan" not in table.segment.tolist()

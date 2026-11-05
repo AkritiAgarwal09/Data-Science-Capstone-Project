@@ -161,6 +161,7 @@ def test_quality_agent_in_graph(tmp_path, monkeypatch, scenario, attempts, avail
     agents[Stage.MODEL_SELECTION] = generator
     llm = FakeLLM([FIXTURE_DIAGNOSIS] * 3)
     # Explicit fixtures keep this routing test independent of the real split/repair stages.
+    llm = FakeLLM([FIXTURE_DIAGNOSIS] * (attempts - int(available)))
     agents[Stage.QUALITY_CHECK] = partial(quality_module.run_quality, client=llm)
     state, run = graph_module.run_pipeline(
         _config(tmp_path), runs_dir=tmp_path / "runs", agents=agents
