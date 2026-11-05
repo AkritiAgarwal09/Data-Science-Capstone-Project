@@ -468,7 +468,8 @@ def _propose_retry(
     failed = _failed_hard_checks(request)
     privacy = bool(set(failed) & PRIVACY_CHECKS)
     limits = _retry_limits(settings, request.config.gan_bounds, privacy)
-    applied, reason = rule_settings, rule_reason
+    applied, reason, source, proposed = rule_settings, rule_reason, "rule", None
+    _log_unsupported_adjustments(request, run)
     if limits is not None:
         fallback = RetrySettings(**rule_settings, reason="Rule-based default: " + rule_reason)
         report = request.previous_report
@@ -500,6 +501,7 @@ def _propose_retry(
             client=client,
         )
         if answer.reason != fallback.reason:
+            proposed = {name: getattr(answer, name) for name in SETTING_NAMES}
             normalized = _normalize(answer, limits)
             if normalized is None:
                 log_decision(
@@ -507,7 +509,7 @@ def _propose_retry(
                     "retry_rejected",
                     {
                         "attempt": request.attempt,
-                        "proposed": {name: getattr(answer, name) for name in SETTING_NAMES},
+                        "proposed": proposed,
                         "limits": {name: list(edges) for name, edges in limits.items()},
                     },
                     "REJECTED",
@@ -515,19 +517,50 @@ def _propose_retry(
                     run=run,
                 )
             else:
-                applied, reason = normalized, answer.reason
-    # Step 4D replaces this line with a log of all four settings and their source.
-    _log_retry(
-        "hyperparameter_retry" if applied["epochs"] != settings["epochs"] else "retry_unchanged",
-        request.attempt,
-        settings["epochs"],
-        applied["epochs"],
-        request.config.gan_bounds,
-        failed,
+                applied, reason, source = normalized, answer.reason, "llm"
+    changed = any(applied[name] != settings[name] for name in SETTING_NAMES)
+    log_decision(
+        "model_selection",
+        "hyperparameter_retry" if changed else "retry_unchanged",
+        {
+            "attempt": request.attempt,
+            "source": source,
+            "previous_settings": settings,
+            "proposed": proposed,
+            "applied": applied,
+            "limits": {name: list(edges) for name, edges in limits.items()} if limits else None,
+            "failed_checks": failed,
+            "privacy_failed": privacy,
+            # Kept for readers of the earlier one-setting log line.
+            "previous_epochs": settings["epochs"],
+            "epochs": applied["epochs"],
+            "bound": _bounds_json(request.config.gan_bounds).get("epochs"),
+        },
+        "ADJUSTED" if changed else "UNCHANGED",
         reason,
-        run,
+        run=run,
     )
     return applied
+
+
+# Diagnosis adjustments with no CTGAN setting behind them. They are reported, never applied.
+UNSUPPORTED_ADJUSTMENTS = ("rebalance_categories", "change_sampling")
+
+
+def _log_unsupported_adjustments(request: ModelSelectionInput, run: RunDir) -> None:
+    report = request.previous_report
+    if report is None or report.diagnosis is None:
+        return
+    for adjustment in dict.fromkeys(report.diagnosis.adjustments):
+        if adjustment in UNSUPPORTED_ADJUSTMENTS:
+            log_decision(
+                "model_selection",
+                "unsupported_adjustment",
+                {"attempt": request.attempt, "adjustment": adjustment},
+                "NOT_APPLIED",
+                "No CTGAN setting implements this adjustment, so it is reported only.",
+                run=run,
+            )
 
 
 def _matches(names: list[str], tokens: tuple[str, ...]) -> bool:
@@ -537,22 +570,6 @@ def _matches(names: list[str], tokens: tuple[str, ...]) -> bool:
 def _privacy_failed(failed: list[str]) -> bool:
     """Exact names from the privacy tool; a substring match missed exact_train_copies."""
     return bool(set(failed) & PRIVACY_CHECKS)
-
-
-def _log_retry(rule, attempt, previous, proposed, bounds, failed, rationale, run: RunDir) -> None:
-    log_decision(
-        "model_selection", rule,
-        {
-            "attempt": attempt,
-            "previous_epochs": previous,
-            "epochs": proposed,
-            "bound": _bounds_json(bounds).get("epochs"),
-            "failed_checks": failed,
-        },
-        "ADJUSTED" if rule == "hyperparameter_retry" else "UNCHANGED",
-        rationale,
-        run=run,
-    )
 
 
 def _train_ctgan(

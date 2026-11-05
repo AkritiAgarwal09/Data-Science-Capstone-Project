@@ -24,6 +24,7 @@ from agentic_gan.schemas import (
     LevelReport,
     ModelSelectionInput,
     PreprocessOutput,
+    QualityDiagnosis,
     QualityReport,
     RunConfig,
     Status,
@@ -781,3 +782,84 @@ def test_llm_proposal_outside_the_limits_falls_back_to_the_rule(tmp_path, gan):
     assert gan.trains[0][1]["epochs"] == 400
     assert _logged(run, "llm_step") == "LLM_FALLBACK"
     assert _logged(run, "hyperparameter_retry") == "ADJUSTED"
+
+
+# --- Retry logging: one line per retry, with its source -----------------------------------------
+
+RETRY_RULES = {"hyperparameter_retry", "retry_unchanged"}
+
+
+def _retry_lines(run):
+    decisions = read_decisions(run)
+    return decisions[decisions.rule.isin(RETRY_RULES)]
+
+
+def test_an_accepted_proposal_logs_one_retry_line_from_the_llm(tmp_path, gan):
+    request, run, _path = _retry_request(tmp_path, {"epochs": (100, 600)}, "column_distance")
+    run_model_selection(request, run, client=FakeLLM([PROPOSAL]))
+    lines = _retry_lines(run)
+    assert len(lines) == 1
+    line = lines.iloc[0]
+    assert line.rule == "hyperparameter_retry" and line.outcome == "ADJUSTED"
+    assert line.inputs["source"] == "llm"
+    assert line.inputs["proposed"] == {k: PROPOSAL[k] for k in CTGAN_DEFAULTS}
+    assert line.inputs["applied"] == {**CTGAN_DEFAULTS, "epochs": 500}
+    assert line.inputs["previous_settings"] == CTGAN_DEFAULTS
+    assert line.inputs["limits"]["epochs"] == [100, 600]
+    assert line.inputs["privacy_failed"] is False
+    assert line.inputs["failed_checks"] == ["column_distance"]
+    assert line.rationale == PROPOSAL["reason"]
+    # The old one-setting keys are still there.
+    assert (line.inputs["previous_epochs"], line.inputs["epochs"]) == (300, 500)
+    assert line.inputs["bound"] == [100, 600]
+
+
+def test_a_fallback_logs_one_retry_line_from_the_rule(tmp_path, gan):
+    bad = {**PROPOSAL, "epochs": 900}
+    request, run, _path = _retry_request(tmp_path, {"epochs": (100, 600)}, "column_distance")
+    run_model_selection(request, run, client=FakeLLM([bad, bad]))
+    lines = _retry_lines(run)
+    assert len(lines) == 1
+    line = lines.iloc[0]
+    assert line.rule == "hyperparameter_retry" and line.outcome == "ADJUSTED"
+    assert line.inputs["source"] == "rule"
+    assert line.inputs["proposed"] is None
+    assert line.inputs["applied"] == {**CTGAN_DEFAULTS, "epochs": 400}
+    assert "epochs move from 300 to 400" in line.rationale
+
+
+def test_the_no_llm_path_also_logs_exactly_one_retry_line(tmp_path, gan):
+    fake = FakeLLM([])
+    request, run, _path = _retry_request(tmp_path, {}, "column_distance")
+    run_model_selection(request, run, client=fake)
+    assert fake.calls == []
+    lines = _retry_lines(run)
+    assert len(lines) == 1
+    line = lines.iloc[0]
+    assert line.rule == "retry_unchanged" and line.outcome == "UNCHANGED"
+    assert line.inputs["source"] == "rule"
+    assert line.inputs["limits"] is None
+    assert line.rationale == "retry has no legal adjustment"
+
+
+def test_unsupported_adjustments_are_reported_once_and_not_applied(tmp_path, gan):
+    diagnosis = QualityDiagnosis(
+        failed_checks=["column_distance"],
+        columns=["job"],
+        likely_cause="Job categories are off.",
+        adjustments=["more_epochs", "rebalance_categories"],
+    )
+    report = _fail_report("column_distance").model_copy(update={"diagnosis": diagnosis})
+    config = _config(tmp_path, gan_bounds={"epochs": (100, 600)})
+    request, run, _path = _request(
+        tmp_path, config, _bank_frame(), 500, 1500, attempt=2, previous=report,
+    )
+    run_model_selection(request, run, client=FakeLLM([PROPOSAL]))
+    decisions = read_decisions(run)
+    unsupported = decisions.query("rule == 'unsupported_adjustment'")
+    assert len(unsupported) == 1
+    assert unsupported.iloc[0].inputs["adjustment"] == "rebalance_categories"
+    assert unsupported.iloc[0].outcome == "NOT_APPLIED"
+    # It comes before the retry line, and more_epochs produced no such line.
+    assert unsupported.index[0] < _retry_lines(run).index[0]
+    assert gan.trains[0][1]["epochs"] == 500
