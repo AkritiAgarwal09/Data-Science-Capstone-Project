@@ -45,6 +45,12 @@ def test_sample_minority_flagged(trained):
     assert out["age"].dtype.kind == "i"
 
 
+def test_unconditional_sample_still_keeps_target(trained):
+    out = _ctgan().sample_synthetic(trained, 20, target_value=1, seed=1, conditional=False)
+    assert len(out) == 20
+    assert (out["y"] == 1).all()
+
+
 def test_dedupe_against_real(trained, df):
     out = _ctgan().sample_synthetic(trained, 30, drop_duplicates_of=df)
     assert len(out) == 30
@@ -84,3 +90,23 @@ def test_unconditional_sampling_keeps_only_target_rows(trained):
     out = _ctgan().sample_synthetic(trained, 20, target_value=1, conditional=False)
     assert len(out) == 20
     assert (out["y"] == 1).all() and (out["is_synthetic"] == 1).all()
+
+
+def test_range_report_counts_draws_outside_the_training_range(trained):
+    report: dict = {}
+    out = _ctgan().sample_synthetic(trained, 30, seed=3, range_report=report)
+    assert len(out) == 30
+    assert set(report) == set(trained.numeric_ranges) == {"age", "income"}
+    for stats in report.values():
+        assert set(stats) == {"below", "above", "outside", "rows"}
+        assert 0.0 <= stats["below"] <= 1.0 and 0.0 <= stats["above"] <= 1.0
+        assert stats["outside"] == pytest.approx(stats["below"] + stats["above"])
+        assert stats["rows"] >= 30
+    # the returned rows are still clipped, whatever the report says
+    lo, hi = trained.numeric_ranges["income"]
+    assert out["income"].between(lo, hi).all()
+
+
+def test_range_report_is_optional(trained):
+    out = _ctgan().sample_synthetic(trained, 10, seed=3)
+    assert len(out) == 10
