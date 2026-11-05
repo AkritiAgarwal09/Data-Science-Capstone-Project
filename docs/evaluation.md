@@ -18,7 +18,10 @@ GAN arm is omitted from the comparisons. Missing arms are valid.
 Segment metrics use source-row joins to the source dataset, with observed binary
 labels and real-row provenance checks. Available age, job, marital, education and
 Default demographic columns are evaluated. Numeric segment bands use evaluated
-rows only. Small test sets and small positive-count groups are flagged. Missing
+rows only. Interval labels also export numeric `segment_lower_bound` and
+`segment_upper_bound` evidence, so a quoted boundary can pass number verification
+without allowing arbitrary numbers. Missing segment values remain excluded.
+Small test sets and small positive-count groups are flagged. Missing
 segment columns are reported as a limitation, not evidence of fairness.
 
 ## Verified narrative and fallback
@@ -41,7 +44,9 @@ The report always includes negative/inconclusive results, small-sample caveats,
 augmentation availability, the recorded volume decision (or its absence), audit
 references, and ethical limitations. Verdicts and tables come from tools, not LLM
 calculations. The JSON evidence retains skipped-fit reasons, the quality report,
-GAN-unavailability reason, volume rationale and audit paths.
+GAN-unavailability reason, volume rationale and audit paths. Constant validation-score
+models excluded by training remain in the metrics and evidence, and are called out
+in the limitations section; they do not enter selected-model comparisons.
 
 ## Artifacts
 

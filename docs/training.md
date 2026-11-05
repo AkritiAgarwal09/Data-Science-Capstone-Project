@@ -111,8 +111,14 @@ registration:
   volume rule; this agent does not choose a volume.
 - `training_protocol.json`: the exact frozen reference.
 
-The selected model per arm/fill/seed maximizes real validation PR-AUC; ties retain
-suite order. Test predictions and metrics are saved for **all** fitted models as
+The selected model per arm/fill/seed maximizes real validation PR-AUC among fits
+with nonconstant validation probabilities; ties retain suite order. A constant
+predictor cannot rank rows, but trapezoidal PR-AUC can still give it a high area
+because of endpoint interpolation. Its fit, scores and predictions are retained
+with `selected=False`, a warning, and an audit decision. `metrics.csv` records
+`validation_probability_range` and `selection_eligible`. If every successful fit
+is constant, no model is selected for that group. Eligibility uses validation only;
+the frozen PR-AUC definition, estimator settings and thresholds are unchanged. Test predictions and metrics are saved for **all** fitted models as
 requested by the agent contract, unlike the winner-only baseline CLI. Test metrics
 are descriptive and never choose models, thresholds, fill levels, or seeds.
 
