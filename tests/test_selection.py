@@ -12,6 +12,7 @@ from agentic_gan.agents.model_selection import (
     _rule_hash,
     run_model_selection,
 )
+from agentic_gan.llm import FakeLLM
 from agentic_gan.orchestrator.decisions import read_decisions
 from agentic_gan.orchestrator.manifest import create_run
 from agentic_gan.schemas import (
@@ -660,3 +661,19 @@ def test_retry_settings_reject_unknown_fields_and_an_empty_reason():
         )
     with pytest.raises(ValidationError):
         RetrySettings(epochs=400, pac=10, discriminator_steps=1, reason="missing batch_size")
+
+
+# --- Explanation step ----------------------------------------------------------------------------
+
+
+def test_first_attempt_asks_the_llm_to_explain_and_logs_the_answer(tmp_path, gan):
+    fake = FakeLLM([{"generator": "ctgan", "explanation": "Mixed columns, so CTGAN."}])
+    request, run, _path = _request(tmp_path, _config(tmp_path), _bank_frame(), 500, 1500)
+    output = run_model_selection(request, run, client=fake)
+    assert len(fake.calls) == 1
+    assert output.generator == "ctgan"
+    steps = read_decisions(run).query("rule == 'llm_step' and agent == 'model_selection'")
+    assert len(steps) == 1
+    assert steps.outcome.iloc[0] == {
+        "generator": "ctgan", "explanation": "Mixed columns, so CTGAN."
+    }

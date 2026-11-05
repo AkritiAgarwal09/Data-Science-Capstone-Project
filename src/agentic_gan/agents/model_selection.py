@@ -6,10 +6,12 @@ import hashlib
 import inspect
 import json
 from collections.abc import Sequence
+from dataclasses import asdict
 
 import pandas as pd
 from pydantic import Field
 
+from agentic_gan.llm import LLMStepOptions, run_llm_step
 from agentic_gan.orchestrator.decisions import log_decision
 from agentic_gan.orchestrator.manifest import RunDir
 from agentic_gan.schemas import (
@@ -17,6 +19,7 @@ from agentic_gan.schemas import (
     ModelSelectionInput,
     RunConfig,
     Schema,
+    Stage,
     Status,
     SyntheticSet,
     fill_rows,
@@ -162,8 +165,14 @@ def describe_characteristics(
     return described
 
 
-def run_model_selection(request: ModelSelectionInput, run: RunDir) -> GeneratorOutput:
-    """Select from the baseline training split only. Validation and test are not read."""
+def run_model_selection(
+    request: ModelSelectionInput, run: RunDir, *, client=None
+) -> GeneratorOutput:
+    """Select from the baseline training split only. Validation and test are not read.
+
+    `client` is the LLM client for the explanation step; tests pass a FakeLLM. With none, the
+    step logs LLM_FALLBACK and the rule's own rationale stands.
+    """
     train = pd.read_csv(request.preprocess.baseline.train_path)
     if IS_SYNTHETIC in train.columns:
         raise ValueError(f"training data must not already contain {IS_SYNTHETIC!r}")
@@ -173,6 +182,10 @@ def run_model_selection(request: ModelSelectionInput, run: RunDir) -> GeneratorO
         model_frame = model_frame.drop(columns=[HORIZON_LABEL], errors="ignore")
     result = select_generator(described, min_rows=request.config.min_rows)
     _log_steps(result, request.attempt, run)
+    if request.attempt == 1:
+        # The rule is the same on every attempt; explain it once. The answer lives in the
+        # decision log only and never reaches GeneratorOutput.
+        _explain(result, request, run, client)
 
     if result.status == "skipped" or not result.trainable:
         return _skipped(result)
@@ -250,6 +263,36 @@ def _check_class_counts(train, target, positive, positives, request: ModelSelect
             f"training class counts {(positives, negatives)} disagree with "
             f"baseline counts {(expected_pos, expected_neg)}"
         )
+
+
+def _explain(
+    result: SelectionResult, request: ModelSelectionInput, run: RunDir, client
+) -> SelectionExplanation:
+    """Ask the LLM to explain the logged steps. It must echo the rule's generator, never pick."""
+    expected = result.generator or "none"
+    context = json.dumps(
+        {
+            "dataset": request.config.dataset_name,
+            "status": result.status,
+            "generator": expected,
+            "steps": [asdict(step) for step in result.steps],
+        },
+        default=str,
+    )
+    return run_llm_step(
+        Stage.MODEL_SELECTION.value,
+        EXPLAIN_PROMPT,
+        context,
+        SelectionExplanation,
+        LLMStepOptions(
+            fallback=SelectionExplanation(generator=expected, explanation=result.rationale),
+            allowed_options={"generator": (expected,)},
+            expected_rule_hash=_rule_hash(request.config),
+            current_rule_hash=lambda: _rule_hash(run.load_config()),
+        ),
+        run,
+        client=client,
+    )
 
 
 def _log_steps(result: SelectionResult, attempt: int, run: RunDir) -> None:
