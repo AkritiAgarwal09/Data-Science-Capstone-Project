@@ -18,10 +18,19 @@ import pytest
 from google.auth.exceptions import DefaultCredentialsError, RefreshError
 from pydantic import BaseModel
 from test_quality_agent import V1_DRIVERS, v1  # noqa: F401  (v1 is a fixture)
+from test_selection import (  # noqa: F401
+    _bank_frame,
+    _config,
+    _request,
+    _retry_lines,
+    _retry_request,
+    gan,
+)
 from test_training_agent import experiment, make_experiment, planning, tiny_suite  # noqa: F401
 
 import agentic_gan.agents.quality as quality_module
 from agentic_gan.agents import training
+from agentic_gan.agents.model_selection import CTGAN_DEFAULTS, run_model_selection
 from agentic_gan.llm import VertexClient
 from agentic_gan.orchestrator import graph
 from agentic_gan.orchestrator.decisions import read_decisions
@@ -55,6 +64,17 @@ OUTSIDE_THE_ALLOWED_OPTIONS = {
         "columns": ["not_a_column"],
         "likely_cause": "Unknown.",
         "adjustments": ["retrain_everything"],
+    },
+    "SelectionExplanation": {
+        "generator": "wgan_gp",
+        "explanation": "Always use something else.",
+    },
+    "RetrySettings": {
+        "epochs": 1000000,
+        "pac": 3,
+        "discriminator_steps": 99,
+        "batch_size": 7,
+        "reason": "Because I said so",
     },
 }
 
@@ -167,6 +187,40 @@ def test_quality_diagnosis_falls_back_to_the_facts_and_keeps_the_verdict(v1, ver
     assert set(V1_DRIVERS) <= set(report.diagnosis.columns)
     assert "AUC 0.86" in report.diagnosis.likely_cause
     assert read_decisions(run).query("rule == 'llm_step'").outcome.tolist() == ["LLM_FALLBACK"]
+    assert seen.attempts == 2
+
+
+@pytest.mark.parametrize("scenario", SCENARIOS)
+def test_model_selection_explanation_falls_back_and_keeps_the_rule(
+    tmp_path, gan, vertex, scenario,  # noqa: F811
+):
+    seen = vertex(**SCENARIOS[scenario])
+    request, run, _path = _request(tmp_path, _config(tmp_path), _bank_frame(), 500, 1500)
+    output = run_model_selection(request, run)
+    assert output.status is Status.SUCCESS
+    assert output.generator == "ctgan"
+    assert {name: output.hyperparameters[name] for name in CTGAN_DEFAULTS} == CTGAN_DEFAULTS
+    steps = read_decisions(run).query("rule == 'llm_step'")
+    assert steps.outcome.tolist() == ["LLM_FALLBACK"]
+    assert set(steps.agent) == {"model_selection"}
+    assert seen.attempts == 2
+
+
+@pytest.mark.parametrize("scenario", SCENARIOS)
+def test_model_selection_retry_falls_back_to_the_rule_epochs(
+    tmp_path, gan, vertex, scenario,  # noqa: F811
+):
+    seen = vertex(**SCENARIOS[scenario])
+    request, run, _path = _retry_request(tmp_path, {"epochs": (100, 600)}, "column_distance")
+    output = run_model_selection(request, run)
+    assert output.status is Status.SUCCESS
+    assert gan.trains[-1][1]["epochs"] == 400
+    retry = _retry_lines(run)
+    assert len(retry) == 1
+    assert retry.iloc[0].inputs["source"] == "rule"
+    steps = read_decisions(run).query("rule == 'llm_step'")
+    assert steps.outcome.tolist() == ["LLM_FALLBACK"]
+    assert set(steps.agent) == {"model_selection"}
     assert seen.attempts == 2
 
 
