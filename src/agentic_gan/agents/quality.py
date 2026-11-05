@@ -202,8 +202,12 @@ def run_quality(request: QualityInput, run: RunDir, *, client=None) -> QualityRe
     """
     config = request.config
     target = config.target
-    train = pd.read_csv(request.preprocess.baseline.train_path)
-    val = pd.read_csv(request.preprocess.baseline.val_path)
+    train = pd.read_csv(request.preprocess.baseline.train_path).drop(
+        columns="source_row", errors="ignore"
+    )
+    val = pd.read_csv(request.preprocess.baseline.val_path).drop(
+        columns="source_row", errors="ignore"
+    )
     positive = _positive_class(request, train)
     rules = _rules(request)
     discrete = DATASETS[config.dataset_name].discrete if config.dataset_name in DATASETS else ()
