@@ -6,6 +6,7 @@ plot, a chart of the largest correlation differences, and diagnostics.txt.
 
 from __future__ import annotations
 
+import argparse
 import json
 import math
 from pathlib import Path
@@ -23,8 +24,6 @@ from agentic_gan.utils.datasets import DATASETS
 ROOT = Path(__file__).resolve().parents[2]
 CONFIG = DATASETS["polish"]
 TRAIN_FILE = ROOT / "data" / "interim" / CONFIG.name / "train_cleaned.csv"
-ARTIFACTS = ROOT / "eda" / "ctgan_polish" / "artifacts"
-SYNTHETIC = ROOT / "data" / "interim" / CONFIG.name / "synthetic" / "polish_ctgan_fill50.csv"
 SOURCE_ROW = "source_row"
 PAGE_SIZE = 16
 KS_STRUGGLE = 0.15
@@ -63,7 +62,9 @@ def plot_loss(losses: pd.DataFrame, path: Path) -> None:
     plt.close(figure)
 
 
-def plot_numeric_pages(real: pd.DataFrame, synthetic: pd.DataFrame, columns: list[str]) -> None:
+def plot_numeric_pages(
+    real: pd.DataFrame, synthetic: pd.DataFrame, columns: list[str], artifacts: Path
+) -> None:
     pages = math.ceil(len(columns) / PAGE_SIZE)
     for page in range(pages):
         chunk = columns[page * PAGE_SIZE:(page + 1) * PAGE_SIZE]
@@ -92,7 +93,7 @@ def plot_numeric_pages(real: pd.DataFrame, synthetic: pd.DataFrame, columns: lis
             y=1.01,
         )
         figure.tight_layout()
-        figure.savefig(ARTIFACTS / f"dist_numeric_{page + 1}.png", dpi=120, bbox_inches="tight")
+        figure.savefig(artifacts / f"dist_numeric_{page + 1}.png", dpi=120, bbox_inches="tight")
         plt.close(figure)
 
 
@@ -173,25 +174,37 @@ def _numeric_note(name: str, real: pd.Series, synthetic: pd.Series, ks: float) -
     return ". ".join(parts) + "."
 
 
+def _output_paths(version: str) -> tuple[Path, Path]:
+    folder = "artifacts_v2" if version == "v2" else "artifacts"
+    stem = "polish_ctgan_v2" if version == "v2" else "polish_ctgan"
+    artifacts = ROOT / "eda" / "ctgan_polish" / folder
+    synthetic = ROOT / "data" / "interim" / CONFIG.name / "synthetic" / f"{stem}_fill50.csv"
+    return artifacts, synthetic
+
+
 def main() -> None:
-    meta_path = ARTIFACTS / "run_meta.json"
-    if not meta_path.exists() or not SYNTHETIC.exists():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--settings", choices=["v1", "v2"], default="v1")
+    version = parser.parse_args().settings
+    artifacts, synthetic_path = _output_paths(version)
+    meta_path = artifacts / "run_meta.json"
+    if not meta_path.exists() or not synthetic_path.exists():
         raise SystemExit("run the Polish CTGAN script before diagnostics")
     meta = json.loads(meta_path.read_text())
     target = CONFIG.target
     raw = pd.read_csv(TRAIN_FILE).drop(columns=[SOURCE_ROW])
     real = raw.loc[raw[target] == 1].reset_index(drop=True)
-    synthetic = pd.read_csv(SYNTHETIC)
+    synthetic = pd.read_csv(synthetic_path)
     numeric = [f"A{index}" for index in range(1, 65)]
     missing = [column for column in numeric if column not in raw.columns]
     if missing or "cohort" not in raw.columns:
         raise SystemExit(f"Polish training columns are missing: {missing}")
 
-    plot_loss(pd.read_csv(ARTIFACTS / "ctgan_losses.csv"), ARTIFACTS / "loss_curves.png")
-    plot_numeric_pages(real, synthetic, numeric)
-    plot_cohort(real["cohort"], synthetic["cohort"], ARTIFACTS / "dist_cohort.png")
+    plot_loss(pd.read_csv(artifacts / "ctgan_losses.csv"), artifacts / "loss_curves.png")
+    plot_numeric_pages(real, synthetic, numeric, artifacts)
+    plot_cohort(real["cohort"], synthetic["cohort"], artifacts / "dist_cohort.png")
     mean_corr, top_pairs = correlation_report(
-        real, synthetic, numeric, ARTIFACTS / "corr_difference.png"
+        real, synthetic, numeric, artifacts / "corr_difference.png"
     )
 
     numeric_rows = []
@@ -282,9 +295,9 @@ def main() -> None:
         lines.append(f"  {note}{mark}")
     cohort_mark = " struggled." if cohort_tvd >= TVD_STRUGGLE else ""
     lines.append(f"  cohort: TVD {cohort_tvd:.3f}.{cohort_mark}")
-    (ARTIFACTS / "diagnostics.txt").write_text("\n".join(lines) + "\n")
+    (artifacts / "diagnostics.txt").write_text("\n".join(lines) + "\n")
     worst = ", ".join(f"{row['column']} {row['ks']:.3f}" for row in ranked[:5])
-    print(f"wrote {ARTIFACTS.relative_to(ROOT) / 'diagnostics.txt'}")
+    print(f"wrote {artifacts.relative_to(ROOT) / 'diagnostics.txt'}")
     print("worst numeric:", worst)
     print(f"cohort TVD: {cohort_tvd:.3f}")
 

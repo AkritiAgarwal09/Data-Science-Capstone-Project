@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from agentic_gan.utils.ctgan_settings import load_ctgan_settings, v2_settings_path
+from agentic_gan.utils.ctgan_settings import load_ctgan_settings
 
 
 def test_v1_is_the_bank_run():
@@ -26,12 +26,26 @@ def test_command_line_overrides_epochs_device_and_seed():
     assert settings.pac == 10
 
 
-def test_v2_is_refused_until_the_settings_file_exists():
-    missing = v2_settings_path()
-    if missing.exists():
-        pytest.skip("a local v2 settings file is present")
-    with pytest.raises(SystemExit, match="not available yet"):
-        load_ctgan_settings("v2")
+def test_v2_is_the_bank_recipe():
+    settings = load_ctgan_settings("v2")
+    assert settings.version == "v2"
+    assert settings.source == "bank v2"
+    assert settings.epochs == 300
+    assert settings.batch_size == 500
+    assert settings.pac == 5
+    assert settings.discriminator_steps == 3
+    assert settings.generator_dim == (256, 256)
+    assert settings.discriminator_dim == (256, 256)
+    assert settings.conditional is False
+    assert settings.rake is True
+    assert settings.pool_rows == 60_000
+    assert settings.seed == 42
+
+
+def test_missing_settings_file_is_refused(tmp_path: Path):
+    missing = tmp_path / "missing.json"
+    with pytest.raises(SystemExit, match="does not exist"):
+        load_ctgan_settings("v2", path=missing)
 
 
 def test_v2_file_is_loaded_when_present(tmp_path: Path):

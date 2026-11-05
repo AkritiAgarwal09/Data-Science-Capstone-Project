@@ -1,0 +1,45 @@
+{
+  "dataset": "polish",
+  "settings_version": "v2",
+  "settings_source": "bank v2",
+  "input": "data/interim/polish/train_cleaned.csv",
+  "rows": 26043,
+  "positive_count": 1255,
+  "negative_count": 24788,
+  "class_gap": 23533,
+  "target": "bankrupt",
+  "target_value": 1,
+  "discrete": [
+    "cohort"
+  ],
+  "epochs": 300,
+  "batch_size": 500,
+  "pac": 5,
+  "discriminator_steps": 3,
+  "generator_dim": [
+    256,
+    256
+  ],
+  "discriminator_dim": [
+    256,
+    256
+  ],
+  "device": "cpu",
+  "seed": 42,
+  "conditional": false,
+  "rake_columns": [
+    "cohort"
+  ],
+  "sampling": "unconditional, rows with bankrupt=1 kept, discrete columns raked to the real minority shares, documented consistency rules applied: none",
+  "train_seconds": 3277.8,
+  "sampled_rows": 60000,
+  "outputs": {
+    "fill10": "data/interim/polish/synthetic/polish_ctgan_v2_fill10.csv",
+    "fill25": "data/interim/polish/synthetic/polish_ctgan_v2_fill25.csv",
+    "fill50": "data/interim/polish/synthetic/polish_ctgan_v2_fill50.csv"
+  },
+  "model": "eda/ctgan_polish/artifacts_v2/ctgan_polish_v2.pkl",
+  "losses": "eda/ctgan_polish/artifacts_v2/ctgan_losses.csv",
+  "recipe": "bank v2",
+  "validation_and_test_read": false
+}

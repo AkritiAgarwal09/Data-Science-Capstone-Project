@@ -1,8 +1,10 @@
 """CTGAN run settings for the Default and Polish synthetic-data scripts.
 
-v1 is the Bank run: 300 epochs, batch size 500, pac 10, one discriminator step,
-conditional sampling, no raking. v2 is not chosen yet. When it is, save
-``eda/ctgan_v2_settings.json`` and rerun with ``--settings v2``.
+v1 is the original Bank run: 300 epochs, batch size 500, pac 10, one discriminator
+step, conditional sampling, no raking. v2 is the Bank recipe in
+``docs/notes/ctgan_bank_v2.md``: pac 5, three discriminator steps, unconditional
+sampling, and raking from a 60,000-row pool. Pass ``path`` to load a different v2
+JSON instead of that recipe.
 """
 
 from __future__ import annotations
@@ -23,6 +25,22 @@ V1 = {
     "conditional": True,
     "rake": False,
     "pool_rows": None,
+}
+
+# Bank v2 (docs/notes/ctgan_bank_v2.md, eda/ctgan_bank/make_v2.py): pac 5,
+# discriminator steps 3, unconditional sampling, rake a 60,000-row pool.
+V2 = {
+    "epochs": 300,
+    "batch_size": 500,
+    "pac": 5,
+    "discriminator_steps": 3,
+    "generator_dim": (256, 256),
+    "discriminator_dim": (256, 256),
+    "device": "cpu",
+    "seed": 42,
+    "conditional": False,
+    "rake": True,
+    "pool_rows": 60_000,
 }
 
 _REQUIRED = (
@@ -67,17 +85,20 @@ def load_ctgan_settings(
     device: str | None = None,
     seed: int | None = None,
 ) -> CTGANRunSettings:
-    """Return v1, or v2 once ``eda/ctgan_v2_settings.json`` exists.
+    """Return the Bank v1 run, or the Bank v2 recipe from ``docs/notes/ctgan_bank_v2.md``.
 
     ``epochs``, ``device`` and ``seed`` override the bundle when passed on the command line.
+    ``path`` loads a JSON object in place of the built-in v2 recipe.
     """
     if version == "v1":
         raw = dict(V1)
         source = "bank v1"
+    elif version == "v2" and path is None:
+        raw = dict(V2)
+        source = "bank v2"
     elif version == "v2":
-        settings_path = path if path is not None else v2_settings_path()
-        raw = _read_v2(settings_path)
-        source = str(settings_path)
+        raw = _read_v2(path)
+        source = str(path)
     else:
         raise SystemExit("settings must be v1 or v2")
     if epochs is not None:
@@ -93,8 +114,7 @@ def _read_v2(path: Path) -> dict:
     if not path.is_file():
         keys = ", ".join((*_REQUIRED, "pool_rows"))
         raise SystemExit(
-            "CTGAN v2 settings are not available yet. "
-            f"Save the chosen settings as {path} and rerun with --settings v2. "
+            f"CTGAN settings file {path} does not exist. "
             f"Required keys: {keys}. "
             "pool_rows is required when rake is true. "
             "device and seed are optional and default to cpu and 42."

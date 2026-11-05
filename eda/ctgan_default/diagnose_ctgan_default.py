@@ -6,6 +6,7 @@ heatmap and diagnostics.txt. The last section names the columns that struggled.
 
 from __future__ import annotations
 
+import argparse
 import json
 import math
 from pathlib import Path
@@ -23,8 +24,6 @@ from agentic_gan.utils.datasets import DATASETS
 ROOT = Path(__file__).resolve().parents[2]
 CONFIG = DATASETS["default"]
 TRAIN_FILE = ROOT / "data" / "interim" / CONFIG.name / "train_cleaned.csv"
-ARTIFACTS = ROOT / "eda" / "ctgan_default" / "artifacts"
-SYNTHETIC = ROOT / "data" / "interim" / "default" / "synthetic" / "default_ctgan_fill50.csv"
 SOURCE_ROW = "source_row"
 PAY_COLUMNS = [f"PAY_{month}" for month in range(1, 7)]
 KS_STRUGGLE = 0.15
@@ -223,16 +222,28 @@ def _payment_note(real: pd.DataFrame, synthetic: pd.DataFrame) -> str:
     return "\n".join(lines)
 
 
+def _output_paths(version: str) -> tuple[Path, Path]:
+    folder = "artifacts_v2" if version == "v2" else "artifacts"
+    stem = "default_ctgan_v2" if version == "v2" else "default_ctgan"
+    artifacts = ROOT / "eda" / "ctgan_default" / folder
+    synthetic = ROOT / "data" / "interim" / "default" / "synthetic" / f"{stem}_fill50.csv"
+    return artifacts, synthetic
+
+
 def main() -> None:
-    meta_path = ARTIFACTS / "run_meta.json"
-    if not meta_path.exists() or not SYNTHETIC.exists():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--settings", choices=["v1", "v2"], default="v1")
+    version = parser.parse_args().settings
+    artifacts, synthetic_path = _output_paths(version)
+    meta_path = artifacts / "run_meta.json"
+    if not meta_path.exists() or not synthetic_path.exists():
         raise SystemExit("run the Default CTGAN script before diagnostics")
     meta = json.loads(meta_path.read_text())
     target = CONFIG.target
     discrete = list(CONFIG.discrete)
     raw = pd.read_csv(TRAIN_FILE).drop(columns=[SOURCE_ROW])
     real = raw.loc[raw[target] == 1].reset_index(drop=True)
-    synthetic = pd.read_csv(SYNTHETIC)
+    synthetic = pd.read_csv(synthetic_path)
     numeric = [
         column for column in raw.columns if column not in discrete and column != target
     ]
@@ -241,10 +252,10 @@ def main() -> None:
             f"expected 14 numeric and 9 discrete columns, found {len(numeric)} and {len(discrete)}"
         )
 
-    plot_loss(pd.read_csv(ARTIFACTS / "ctgan_losses.csv"), ARTIFACTS / "loss_curves.png")
-    plot_numeric(real, synthetic, numeric, ARTIFACTS / "dist_numeric.png")
-    plot_categorical(real, synthetic, discrete, ARTIFACTS / "dist_categorical.png")
-    mean_corr = plot_correlation(real, synthetic, numeric, ARTIFACTS / "corr_difference.png")
+    plot_loss(pd.read_csv(artifacts / "ctgan_losses.csv"), artifacts / "loss_curves.png")
+    plot_numeric(real, synthetic, numeric, artifacts / "dist_numeric.png")
+    plot_categorical(real, synthetic, discrete, artifacts / "dist_categorical.png")
+    mean_corr = plot_correlation(real, synthetic, numeric, artifacts / "corr_difference.png")
 
     numeric_rows = []
     for column in numeric:
@@ -342,8 +353,8 @@ def main() -> None:
             row["column"], real[row["column"]], synthetic[row["column"]], row["tvd"]
         )
         lines.append(f"  {note}{mark}")
-    (ARTIFACTS / "diagnostics.txt").write_text("\n".join(lines) + "\n")
-    print(f"wrote {ARTIFACTS.relative_to(ROOT) / 'diagnostics.txt'}")
+    (artifacts / "diagnostics.txt").write_text("\n".join(lines) + "\n")
+    print(f"wrote {artifacts.relative_to(ROOT) / 'diagnostics.txt'}")
     worst_numeric = ", ".join(f"{row['column']} {row['ks']:.3f}" for row in ranked_numeric[:3])
     worst_discrete = ", ".join(f"{row['column']} {row['tvd']:.3f}" for row in ranked_discrete[:3])
     print("worst numeric:", worst_numeric)

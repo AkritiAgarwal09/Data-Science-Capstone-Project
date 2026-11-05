@@ -1,12 +1,14 @@
 """Train CTGAN on the cleaned Default training split and write minority fill files.
 
-The main run uses the Bank v1 settings: 300 epochs, batch size 500, pac 10,
-discriminator steps 1, generator and discriminator widths 256, CPU, seed 42.
-Sampling is conditional on the minority class. The 10, 25 and 50 percent files
-are nested prefixes of one pool.
+``--settings v1`` is the original Bank run: 300 epochs, batch size 500, pac 10,
+one discriminator step, conditional sampling. ``--settings v2`` is Kyle's Bank
+recipe (docs/notes/ctgan_bank_v2.md): pac 5, three discriminator steps,
+unconditional sampling, and raking the discrete columns from a 60,000-row pool.
+v2 files are named default_ctgan_v2_fill*.csv and written beside the v1 files.
+The shared rule list has consistency rules for Bank only, so this script does
+not drop Default rows with a rule filter.
 
-v2 settings are not in the repo yet. When they are chosen, save them as
-eda/ctgan_v2_settings.json and rerun with --settings v2.
+    uv run python eda/ctgan_default/run_ctgan_default.py --settings v2
 """
 
 from __future__ import annotations
@@ -20,6 +22,7 @@ import numpy as np
 import pandas as pd
 
 from agentic_gan.tools.ctgan import sample_synthetic, save_model, train_ctgan
+from agentic_gan.tools.quality_fidelity import RULES
 from agentic_gan.utils.ctgan_settings import load_ctgan_settings
 from agentic_gan.utils.datasets import DATASETS
 from agentic_gan.utils.synthetic import IS_SYNTHETIC, fill_counts
@@ -27,7 +30,6 @@ from agentic_gan.utils.synthetic import IS_SYNTHETIC, fill_counts
 ROOT = Path(__file__).resolve().parents[2]
 CONFIG = DATASETS["default"]
 EDA = ROOT / "eda" / "ctgan_default"
-ARTIFACTS = EDA / "artifacts"
 TRAIN_FILE = ROOT / "data" / "interim" / CONFIG.name / "train_cleaned.csv"
 SYNTHETIC = ROOT / "data" / "interim" / CONFIG.name / "synthetic"
 SOURCE_ROW = "source_row"
@@ -95,6 +97,14 @@ def raked_sample(
     rng = np.random.default_rng(seed)
     picked = rng.choice(len(pool), size=n, replace=False, p=weights)
     return pool.iloc[rng.permutation(picked)].reset_index(drop=True)
+
+
+def _rule_mask(frame: pd.DataFrame) -> pd.Series:
+    """True where a row breaks none of the documented rules for this dataset."""
+    broken = pd.Series(False, index=frame.index)
+    for rule in RULES.get(CONFIG.name, ()):
+        broken |= rule.violated(frame).fillna(False)
+    return ~broken
 
 
 def _codes(series: pd.Series) -> set:
@@ -167,7 +177,10 @@ def main() -> None:
         args.settings, epochs=args.epochs, device=args.device, seed=args.seed
     )
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
-    ARTIFACTS.mkdir(parents=True, exist_ok=True)
+    artifacts = EDA / ("artifacts_v2" if settings.version == "v2" else "artifacts")
+    file_stem = "default_ctgan_v2" if settings.version == "v2" else "default_ctgan"
+    model_name = "ctgan_default_v2.pkl" if settings.version == "v2" else "ctgan_default.pkl"
+    artifacts.mkdir(parents=True, exist_ok=True)
     SYNTHETIC.mkdir(parents=True, exist_ok=True)
     model = load_training_frame()
     target = CONFIG.target
@@ -182,7 +195,7 @@ def main() -> None:
         flush=True,
     )
 
-    loss_path = ARTIFACTS / "ctgan_losses.csv"
+    loss_path = artifacts / "ctgan_losses.csv"
     trained = train_ctgan(
         model,
         target,
@@ -197,12 +210,17 @@ def main() -> None:
         seed=settings.seed,
         log_path=loss_path,
     )
-    model_path = ARTIFACTS / "ctgan_default.pkl"
+    model_path = artifacts / model_name
     save_model(trained, model_path)
 
     sample_n = settings.pool_rows if settings.rake else largest
     if settings.pool_rows is not None and sample_n < largest:
         raise SystemExit(f"pool of {sample_n} rows is smaller than the 50 percent file ({largest})")
+    rules = RULES.get(CONFIG.name, ())
+    if rules:
+        failed = int((~_rule_mask(model)).sum())
+        if failed:
+            raise SystemExit(f"{failed} real training rows break a documented consistency rule")
     pool = sample_synthetic(
         trained,
         sample_n,
@@ -210,6 +228,7 @@ def main() -> None:
         seed=settings.seed,
         drop_duplicates_of=model,
         conditional=settings.conditional,
+        row_filter=_rule_mask if rules else None,
         max_rounds=20 if settings.conditional else 100,
     )
     if len(pool) < sample_n:
@@ -227,11 +246,15 @@ def main() -> None:
         sampling = f"unconditional, rows with {target}={MINORITY} kept"
     if settings.rake:
         sampling += ", discrete columns raked to the real minority shares"
+    if rules:
+        sampling += f", {len(rules)} documented consistency rules applied"
+    else:
+        sampling += ", documented consistency rules applied: none"
 
     written: dict[str, str] = {}
     loaded: dict[str, pd.DataFrame] = {}
     for level in FILL_LEVELS:
-        name = f"default_ctgan_{FILL_NAMES[level]}.csv"
+        name = f"{file_stem}_{FILL_NAMES[level]}.csv"
         path = SYNTHETIC / name
         frame = pool.head(counts[level])
         frame.to_csv(path, index=False)
@@ -268,14 +291,10 @@ def main() -> None:
         "outputs": written,
         "model": str(model_path.relative_to(ROOT)),
         "losses": str(loss_path.relative_to(ROOT)),
-        "v2_settings": (
-            "not available"
-            if settings.version == "v1"
-            else settings.source
-        ),
+        "recipe": settings.source,
         "validation_and_test_read": False,
     }
-    (ARTIFACTS / "run_meta.json").write_text(json.dumps(meta, indent=2) + "\n")
+    (artifacts / "run_meta.json").write_text(json.dumps(meta, indent=2) + "\n")
     print(f"trained in {trained.train_seconds:.1f}s on {settings.device}", flush=True)
     print("Default synthetic files passed the format checks.", flush=True)
 
