@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import inspect
 import json
+import math
 from collections.abc import Sequence
 from dataclasses import asdict
 
@@ -362,6 +363,33 @@ def _failed_hard_checks(request: ModelSelectionInput) -> list[str]:
         for check in level.checks
         if check.hard and not check.passed
     ]
+
+
+def _retry_limits(
+    settings: dict[str, int], gan_bounds: dict, privacy: bool
+) -> dict[str, tuple[int, int]] | None:
+    """Inclusive integer range the LLM may use for each setting, or None if nothing is tunable.
+
+    A setting with no config bound is pinned to its current value, and so is one whose bound
+    holds no integer or does not contain the current value. After a privacy failure epochs may
+    not rise: a longer-trained generator copies more real rows.
+    """
+    limits: dict[str, tuple[int, int]] = {}
+    for name in SETTING_NAMES:
+        current = int(settings[name])
+        if name in gan_bounds:
+            bound_low, bound_high = gan_bounds[name]
+            low, high = math.ceil(bound_low), math.floor(bound_high)
+        else:
+            low = high = current
+        if name == "epochs" and privacy:
+            high = min(high, current)
+        if low > high or not low <= current <= high:
+            low = high = current
+        limits[name] = (low, high)
+    if all(low == high for low, high in limits.values()):
+        return None
+    return limits
 
 
 def _rule_retry(

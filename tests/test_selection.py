@@ -7,8 +7,10 @@ import pytest
 from pydantic import ValidationError
 
 from agentic_gan.agents.model_selection import (
+    CTGAN_DEFAULTS,
     RetrySettings,
     SelectionExplanation,
+    _retry_limits,
     _rule_hash,
     run_model_selection,
 )
@@ -677,3 +679,50 @@ def test_first_attempt_asks_the_llm_to_explain_and_logs_the_answer(tmp_path, gan
     assert steps.outcome.iloc[0] == {
         "generator": "ctgan", "explanation": "Mixed columns, so CTGAN."
     }
+
+
+# --- Retry limits: what the LLM proposer may move ---------------------------------------------
+
+PINNED = {name: (value, value) for name, value in CTGAN_DEFAULTS.items()}
+
+
+def test_retry_limits_are_none_when_nothing_is_bounded():
+    assert _retry_limits(CTGAN_DEFAULTS, {}, privacy=False) is None
+    assert _retry_limits(CTGAN_DEFAULTS, {}, privacy=True) is None
+
+
+def test_retry_limits_open_only_the_bounded_setting():
+    limits = _retry_limits(CTGAN_DEFAULTS, {"epochs": (100, 600)}, privacy=False)
+    assert limits == {**PINNED, "epochs": (100, 600)}
+
+
+def test_retry_limits_cap_epochs_at_the_current_value_after_a_privacy_failure():
+    limits = _retry_limits(CTGAN_DEFAULTS, {"epochs": (100, 600)}, privacy=True)
+    assert limits == {**PINNED, "epochs": (100, CTGAN_DEFAULTS["epochs"])}
+
+
+def test_retry_limits_round_fractional_edges_inward_to_integers():
+    limits = _retry_limits(CTGAN_DEFAULTS, {"epochs": (99.5, 600.4)}, privacy=False)
+    assert limits["epochs"] == (100, 600)
+    assert all(isinstance(edge, int) for edge in limits["epochs"])
+
+
+def test_retry_limits_return_every_bounded_range():
+    bounds = {
+        "epochs": (100, 600),
+        "pac": (5, 10),
+        "discriminator_steps": (1, 3),
+        "batch_size": (100, 1000),
+    }
+    assert _retry_limits(CTGAN_DEFAULTS, bounds, privacy=False) == bounds
+
+
+def test_retry_limits_pin_a_setting_whose_bound_cannot_hold_it():
+    # No integer between 10.2 and 10.8; and 300 epochs lies outside (400, 600).
+    limits = _retry_limits(
+        CTGAN_DEFAULTS, {"pac": (10.2, 10.8), "epochs": (400, 600), "batch_size": (100, 1000)},
+        privacy=False,
+    )
+    assert limits["pac"] == (10, 10)
+    assert limits["epochs"] == (300, 300)
+    assert limits["batch_size"] == (100, 1000)
