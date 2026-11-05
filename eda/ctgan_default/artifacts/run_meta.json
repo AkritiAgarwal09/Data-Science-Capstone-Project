@@ -47,5 +47,216 @@
   "conditional": true,
   "rake_columns": [],
   "sampling": "conditional on y=1",
-  "v2_settings": "not available"
+  "v2_settings": "not available",
+  "selection": {
+    "status": "selected",
+    "generator": "timegan",
+    "trainable": false,
+    "fallback": "ctgan",
+    "comparator": "ctgan",
+    "scope": "monthly payment, bill, and payment-amount variables only",
+    "rationale": "All four temporal conditions passed. TimeGAN covers the monthly block only.",
+    "trained": "ctgan",
+    "override": "CTGAN was trained as the documented fallback (rule DC-4, CTGAN on the flattened wide table) because TimeGAN is not implemented. The rule's choice is TimeGAN for monthly payment, bill, and payment-amount variables only.",
+    "steps": [
+      {
+        "rule": "dcgan_excluded",
+        "outcome": "EXCLUDED",
+        "rationale": "DCGAN is an image generator and is excluded for tabular data.",
+        "inputs": {
+          "dataset": "default",
+          "rows": 18000,
+          "minority_count": 3982,
+          "minority_rate": 0.2212222222222222
+        }
+      },
+      {
+        "rule": "size_gate",
+        "outcome": "PASS",
+        "rationale": "Training rows 18000 meet min_rows 2000.",
+        "inputs": {
+          "dataset": "default",
+          "rows": 18000,
+          "minority_count": 3982,
+          "minority_rate": 0.2212222222222222,
+          "min_rows": 2000
+        }
+      },
+      {
+        "rule": "horizon_gate",
+        "outcome": "PASS",
+        "rationale": "One horizon, or this dataset has no horizon files.",
+        "inputs": {
+          "dataset": "default",
+          "rows": 18000,
+          "minority_count": 3982,
+          "minority_rate": 0.2212222222222222
+        }
+      },
+      {
+        "rule": "missing_gate",
+        "outcome": "PASS",
+        "rationale": "No unresolved missing values remain in the generator table.",
+        "inputs": {
+          "dataset": "default",
+          "rows": 18000,
+          "minority_count": 3982,
+          "minority_rate": 0.2212222222222222
+        }
+      },
+      {
+        "rule": "leakage_gate",
+        "outcome": "PASS",
+        "rationale": "No listed leakage column is in the generator table.",
+        "inputs": {
+          "dataset": "default",
+          "rows": 18000,
+          "minority_count": 3982,
+          "minority_rate": 0.2212222222222222
+        }
+      },
+      {
+        "rule": "minority_gate",
+        "outcome": "PASS",
+        "rationale": "Minority count 3982 is at least 500.",
+        "inputs": {
+          "dataset": "default",
+          "rows": 18000,
+          "minority_count": 3982,
+          "minority_rate": 0.2212222222222222,
+          "minority_min": 500
+        }
+      },
+      {
+        "rule": "temporal_test",
+        "outcome": "PASS",
+        "rationale": "All four temporal conditions passed. TimeGAN covers the monthly block only.",
+        "inputs": {
+          "dataset": "default",
+          "rows": 18000,
+          "minority_count": 3982,
+          "minority_rate": 0.2212222222222222,
+          "entity_key": "PASS",
+          "time_index": "PASS",
+          "min_steps": "PASS",
+          "repeated_observation": "PASS",
+          "generator": "timegan",
+          "wide_steps": 6
+        }
+      },
+      {
+        "rule": "type_routing",
+        "outcome": "NOT_REACHED",
+        "rationale": "TimeGAN was selected, so type routing does not run.",
+        "inputs": {
+          "dataset": "default",
+          "rows": 18000,
+          "minority_count": 3982,
+          "minority_rate": 0.2212222222222222
+        }
+      },
+      {
+        "rule": "fallback",
+        "outcome": "DOCUMENTED",
+        "rationale": "TimeGAN is not implemented. Documented fallback is CTGAN.",
+        "inputs": {
+          "dataset": "default",
+          "rows": 18000,
+          "minority_count": 3982,
+          "minority_rate": 0.2212222222222222,
+          "fallback": "ctgan"
+        }
+      }
+    ]
+  },
+  "out_of_range_before_clip": {
+    "LIMIT_BAL": {
+      "below": 0.011881824020552344,
+      "above": 0.0,
+      "outside": 0.011881824020552344,
+      "rows": 21798
+    },
+    "AGE": {
+      "below": 0.0009633911368015414,
+      "above": 0.0,
+      "outside": 0.0009633911368015414,
+      "rows": 21798
+    },
+    "BILL_AMT1": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 21798
+    },
+    "BILL_AMT2": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 21798
+    },
+    "BILL_AMT3": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 21798
+    },
+    "BILL_AMT4": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 21798
+    },
+    "BILL_AMT5": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 21798
+    },
+    "BILL_AMT6": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 21798
+    },
+    "PAY_AMT1": {
+      "below": 0.06266629966051931,
+      "above": 0.0,
+      "outside": 0.06266629966051931,
+      "rows": 21798
+    },
+    "PAY_AMT2": {
+      "below": 0.12574548123681073,
+      "above": 0.0,
+      "outside": 0.12574548123681073,
+      "rows": 21798
+    },
+    "PAY_AMT3": {
+      "below": 0.2690155060097257,
+      "above": 0.0,
+      "outside": 0.2690155060097257,
+      "rows": 21798
+    },
+    "PAY_AMT4": {
+      "below": 0.07546563904945408,
+      "above": 0.0,
+      "outside": 0.07546563904945408,
+      "rows": 21798
+    },
+    "PAY_AMT5": {
+      "below": 0.26309753188365903,
+      "above": 0.0,
+      "outside": 0.26309753188365903,
+      "rows": 21798
+    },
+    "PAY_AMT6": {
+      "below": 0.11716671254243509,
+      "above": 0.0,
+      "outside": 0.11716671254243509,
+      "rows": 21798
+    }
+  },
+  "out_of_range_source": "re-sampled 20,000 on-target rows from the saved model after the run; the written files came from the original sampling pass",
+  "rules_applied": [],
+  "horizon": null,
+  "imputation_fit_on": "training split"
 }

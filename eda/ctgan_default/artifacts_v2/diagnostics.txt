@@ -1,6 +1,10 @@
 Default CTGAN diagnostics
 settings: v2, epochs 300, batch 500, pac 5, discriminator steps 3, seed 42, device cpu
 sampling: unconditional, rows with y=1 kept, discrete columns raked to the real minority shares, documented consistency rules applied: none
+selection rule: selected, generator timegan, trainable False, fallback ctgan
+  All four temporal conditions passed. TimeGAN covers the monthly block only.
+  override: CTGAN was trained as the documented fallback (rule DC-4, CTGAN on the flattened wide table) because TimeGAN is not implemented. The rule's choice is TimeGAN for monthly payment, bill, and payment-amount variables only.
+  deciding steps: temporal_test PASS; type_routing NOT_REACHED; fallback DOCUMENTED
 training seconds: 1066.6
 comparison: synthetic fill50 vs real training rows with y=1
 real minority rows: 3,982
@@ -45,6 +49,16 @@ Payment status, share of rows with a delay code of 1 or more:
   PAY_5: real minority 25.2%, synthetic 25.7%
   PAY_6: real minority 25.1%, synthetic 24.5%
 The most recent status, PAY_1, is close to the real default rows. Earlier months are listed above so a flat or drifting history is visible.
+
+Values outside the training range before clipping
+  share of 22,574 on-target draws per column; the written files are clipped, so this is the only place the overshoot is visible (rule PB-7)
+  source: re-sampled 20,000 on-target rows from the saved model after the run; the written files came from the original sampling pass
+  PAY_AMT1: 27.6% outside (below 27.6%, above 0.0%)
+  PAY_AMT4: 27.5% outside (below 27.5%, above 0.0%)
+  PAY_AMT3: 19.8% outside (below 19.8%, above 0.0%)
+  PAY_AMT5: 13.1% outside (below 13.1%, above 0.0%)
+  PAY_AMT2: 12.7% outside (below 12.7%, above 0.0%)
+  PAY_AMT6: 11.0% outside (below 11.0%, above 0.0%)
 
 Columns that struggled
 These discrete columns were raked to the real minority shares after sampling: SEX, EDUCATION, MARRIAGE, PAY_1, PAY_2, PAY_3, PAY_4, PAY_5, PAY_6. A small TVD on a raked column is the reweighting, not evidence that CTGAN learned that column. Numeric columns were not raked.

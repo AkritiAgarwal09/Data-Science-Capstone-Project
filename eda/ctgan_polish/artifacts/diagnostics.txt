@@ -1,6 +1,11 @@
 Polish CTGAN diagnostics
 settings: v1, epochs 300, batch 500, pac 10, discriminator steps 1, seed 42, device cpu
+horizon: all five cohorts pooled, as the cleaned table provides them
 sampling: conditional on bankrupt=1
+selection rule: skipped, generator None, trainable False, fallback None
+  More than one Polish horizon is in the table. One horizon file is required.
+  override: CTGAN was trained on a table the selection rule refused: More than one Polish horizon is in the table. One horizon file is required. This is an EDA experiment, not an agent run.
+  deciding steps: horizon_gate FAIL; temporal_test NOT_REACHED; type_routing NOT_REACHED
 training seconds: 1229.7
 comparison: synthetic fill50 vs real training rows with bankrupt=1
 real bankrupt rows: 1,255
@@ -105,6 +110,15 @@ A 64 by 64 heatmap is not a useful check. The largest off-diagonal gaps are:
   A30, A31: -0.944
   A43, A44: -0.940
   A12, A17: +0.937
+
+Values outside the training range before clipping
+  share of 21,462 on-target draws per column; the written files are clipped, so this is the only place the overshoot is visible (rule PB-7)
+  source: re-sampled 20,000 on-target rows from the saved model after the run; the written files came from the original sampling pass
+  A4: 69.4% outside (below 69.4%, above 0.0%)
+  A60: 27.8% outside (below 27.8%, above 0.0%)
+  A47: 15.3% outside (below 15.3%, above 0.0%)
+  A17: 3.3% outside (below 3.3%, above 0.0%)
+  A50: 3.0% outside (below 3.0%, above 0.0%)
 
 Columns that struggled
 Numeric columns are ranked by KS. A column is marked as struggling at KS 0.15 or higher. Cohort is marked at TVD 0.10 or higher.

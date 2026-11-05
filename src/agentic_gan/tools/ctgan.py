@@ -164,6 +164,7 @@ def sample_synthetic(
     row_filter: Callable[[pd.DataFrame], pd.Series] | None = None,
     max_rounds: int = 20,
     conditional: bool = True,
+    range_report: dict[str, dict[str, float]] | None = None,
 ) -> pd.DataFrame:
     """Return exactly ``n`` synthetic rows of ``target_col == target_value`` with is_synthetic=1.
 
@@ -178,6 +179,12 @@ def sample_synthetic(
     CTGAN's conditioning is soft, so rows with the wrong target value are also dropped.
     ``conditional=False`` samples without asking for the target value and keeps the matching
     rows, which shows whether the conditioning itself skews other columns.
+
+    Pass an empty dict as ``range_report`` to learn how often the generator left the training
+    range before clipping. It is filled per numeric column with the share of on-target draws
+    that fell ``below`` the training minimum, ``above`` the maximum, their sum ``outside``,
+    and the number of ``rows`` measured. Clipping hides this otherwise, and a large share is
+    a generator failure on that column, not a clean sample.
     """
     if isinstance(n, bool) or not isinstance(n, int) or n <= 0:
         raise ValueError("n must be a positive integer")
@@ -188,6 +195,8 @@ def sample_synthetic(
     if drop_duplicates_of is not None:
         seen.update(map(tuple, drop_duplicates_of[model.columns].itertuples(index=False)))
 
+    range_counts: dict[str, list[int]] = {c: [0, 0] for c in model.numeric_ranges}
+    range_rows = 0
     kept: list[pd.DataFrame] = []
     total = drawn = on_target = usable = 0
     for _ in range(max_rounds):
@@ -202,7 +211,14 @@ def sample_synthetic(
         else:
             batch = model.model.sample(request)
         drawn += len(batch)
-        batch = _restore_dtypes(batch[model.columns].reset_index(drop=True), model)
+        batch = batch[model.columns].reset_index(drop=True)
+        if range_report is not None:
+            raw = batch[batch[model.target_col] == target_value]
+            range_rows += len(raw)
+            for col, (low, high) in model.numeric_ranges.items():
+                range_counts[col][0] += int((raw[col] < low).sum())
+                range_counts[col][1] += int((raw[col] > high).sum())
+        batch = _restore_dtypes(batch, model)
         batch = batch[batch[model.target_col] == target_value].reset_index(drop=True)
         on_target += len(batch)
         if row_filter is not None:
@@ -225,6 +241,19 @@ def sample_synthetic(
 
     logger.info("Sampled %d rows to keep %d; target-match rate %.1f%%, passed row_filter %.1f%%",
                 drawn, total, 100 * on_target / max(drawn, 1), 100 * usable / max(on_target, 1))
+    if range_report is not None:
+        range_report.clear()
+        denominator = max(range_rows, 1)
+        for col, (below, above) in range_counts.items():
+            range_report[col] = {
+                "below": below / denominator,
+                "above": above / denominator,
+                "outside": (below + above) / denominator,
+                "rows": range_rows,
+            }
+        worst = sorted(range_report.items(), key=lambda item: -item[1]["outside"])[:3]
+        logger.info("Out of training range before clipping, worst columns: %s",
+                    ", ".join(f"{c} {r['outside']:.1%}" for c, r in worst))
     out = pd.concat(kept, ignore_index=True)
     out[IS_SYNTHETIC] = 1
     return out

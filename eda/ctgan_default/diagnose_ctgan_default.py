@@ -19,11 +19,11 @@ import numpy as np
 import pandas as pd
 from scipy.stats import ks_2samp
 
+from agentic_gan.tools.ctgan_fill import fill_paths, range_lines, selection_lines
 from agentic_gan.utils.datasets import DATASETS
 
 ROOT = Path(__file__).resolve().parents[2]
 CONFIG = DATASETS["default"]
-TRAIN_FILE = ROOT / "data" / "interim" / CONFIG.name / "train_cleaned.csv"
 SOURCE_ROW = "source_row"
 PAY_COLUMNS = [f"PAY_{month}" for month in range(1, 7)]
 KS_STRUGGLE = 0.15
@@ -222,26 +222,19 @@ def _payment_note(real: pd.DataFrame, synthetic: pd.DataFrame) -> str:
     return "\n".join(lines)
 
 
-def _output_paths(version: str) -> tuple[Path, Path]:
-    folder = "artifacts_v2" if version == "v2" else "artifacts"
-    stem = "default_ctgan_v2" if version == "v2" else "default_ctgan"
-    artifacts = ROOT / "eda" / "ctgan_default" / folder
-    synthetic = ROOT / "data" / "interim" / "default" / "synthetic" / f"{stem}_fill50.csv"
-    return artifacts, synthetic
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--settings", choices=["v1", "v2"], default="v1")
-    version = parser.parse_args().settings
-    artifacts, synthetic_path = _output_paths(version)
+    paths = fill_paths("default", parser.parse_args().settings)
+    artifacts = paths.artifacts
+    synthetic_path = paths.fill_file("fill50")
     meta_path = artifacts / "run_meta.json"
     if not meta_path.exists() or not synthetic_path.exists():
         raise SystemExit("run the Default CTGAN script before diagnostics")
     meta = json.loads(meta_path.read_text())
     target = CONFIG.target
     discrete = list(CONFIG.discrete)
-    raw = pd.read_csv(TRAIN_FILE).drop(columns=[SOURCE_ROW])
+    raw = pd.read_csv(paths.train_file).drop(columns=[SOURCE_ROW])
     real = raw.loc[raw[target] == 1].reset_index(drop=True)
     synthetic = pd.read_csv(synthetic_path)
     numeric = [
@@ -284,6 +277,7 @@ def main() -> None:
         f"discriminator steps {meta['discriminator_steps']}, seed {meta['seed']}, "
         f"device {meta['device']}",
         "sampling: " + meta.get("sampling", "conditional on the minority class"),
+        *selection_lines(meta),
         f"training seconds: {meta['train_seconds']}",
         "comparison: synthetic fill50 vs real training rows with y=1",
         f"real minority rows: {len(real):,}",
@@ -314,7 +308,7 @@ def main() -> None:
         lines.append(
             "Invalid category codes: none. Every discrete code appears in the real training data."
         )
-    lines.extend(["", _payment_note(real, synthetic), ""])
+    lines.extend(["", _payment_note(real, synthetic), "", *range_lines(meta), ""])
 
     ranked_numeric = sorted(numeric_rows, key=lambda row: row["ks"], reverse=True)
     ranked_discrete = sorted(discrete_rows, key=lambda row: row["tvd"], reverse=True)

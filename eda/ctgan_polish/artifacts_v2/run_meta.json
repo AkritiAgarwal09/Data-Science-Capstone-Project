@@ -41,5 +41,508 @@
   "model": "eda/ctgan_polish/artifacts_v2/ctgan_polish_v2.pkl",
   "losses": "eda/ctgan_polish/artifacts_v2/ctgan_losses.csv",
   "recipe": "bank v2",
-  "validation_and_test_read": false
+  "validation_and_test_read": false,
+  "selection": {
+    "status": "skipped",
+    "generator": null,
+    "trainable": false,
+    "fallback": null,
+    "comparator": null,
+    "scope": "",
+    "rationale": "More than one Polish horizon is in the table. One horizon file is required.",
+    "trained": "ctgan",
+    "override": "CTGAN was trained on a table the selection rule refused: More than one Polish horizon is in the table. One horizon file is required. This is an EDA experiment, not an agent run.",
+    "steps": [
+      {
+        "rule": "dcgan_excluded",
+        "outcome": "EXCLUDED",
+        "rationale": "DCGAN is an image generator and is excluded for tabular data.",
+        "inputs": {
+          "dataset": "polish",
+          "rows": 26043,
+          "minority_count": 1255,
+          "minority_rate": 0.04818953269592597
+        }
+      },
+      {
+        "rule": "size_gate",
+        "outcome": "PASS",
+        "rationale": "Training rows 26043 meet min_rows 2000.",
+        "inputs": {
+          "dataset": "polish",
+          "rows": 26043,
+          "minority_count": 1255,
+          "minority_rate": 0.04818953269592597,
+          "min_rows": 2000
+        }
+      },
+      {
+        "rule": "horizon_gate",
+        "outcome": "FAIL",
+        "rationale": "More than one Polish horizon is in the table. One horizon file is required.",
+        "inputs": {
+          "dataset": "polish",
+          "rows": 26043,
+          "minority_count": 1255,
+          "minority_rate": 0.04818953269592597
+        }
+      },
+      {
+        "rule": "missing_gate",
+        "outcome": "NOT_REACHED",
+        "rationale": "An earlier gate stopped selection.",
+        "inputs": {
+          "dataset": "polish",
+          "rows": 26043,
+          "minority_count": 1255,
+          "minority_rate": 0.04818953269592597
+        }
+      },
+      {
+        "rule": "leakage_gate",
+        "outcome": "NOT_REACHED",
+        "rationale": "An earlier gate stopped selection.",
+        "inputs": {
+          "dataset": "polish",
+          "rows": 26043,
+          "minority_count": 1255,
+          "minority_rate": 0.04818953269592597
+        }
+      },
+      {
+        "rule": "minority_gate",
+        "outcome": "NOT_REACHED",
+        "rationale": "An earlier gate stopped selection.",
+        "inputs": {
+          "dataset": "polish",
+          "rows": 26043,
+          "minority_count": 1255,
+          "minority_rate": 0.04818953269592597
+        }
+      },
+      {
+        "rule": "temporal_test",
+        "outcome": "NOT_REACHED",
+        "rationale": "An earlier gate stopped selection.",
+        "inputs": {
+          "dataset": "polish",
+          "rows": 26043,
+          "minority_count": 1255,
+          "minority_rate": 0.04818953269592597
+        }
+      },
+      {
+        "rule": "type_routing",
+        "outcome": "NOT_REACHED",
+        "rationale": "An earlier gate stopped selection.",
+        "inputs": {
+          "dataset": "polish",
+          "rows": 26043,
+          "minority_count": 1255,
+          "minority_rate": 0.04818953269592597
+        }
+      },
+      {
+        "rule": "fallback",
+        "outcome": "NOT_REACHED",
+        "rationale": "An earlier gate stopped selection.",
+        "inputs": {
+          "dataset": "polish",
+          "rows": 26043,
+          "minority_count": 1255,
+          "minority_rate": 0.04818953269592597
+        }
+      }
+    ]
+  },
+  "out_of_range_before_clip": {
+    "A1": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 22804
+    },
+    "A2": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 22804
+    },
+    "A3": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 22804
+    },
+    "A4": {
+      "below": 0.19356253288896685,
+      "above": 0.0,
+      "outside": 0.19356253288896685,
+      "rows": 22804
+    },
+    "A5": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 22804
+    },
+    "A6": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 22804
+    },
+    "A7": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 22804
+    },
+    "A8": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 22804
+    },
+    "A9": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 22804
+    },
+    "A10": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 22804
+    },
+    "A11": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 22804
+    },
+    "A12": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 22804
+    },
+    "A13": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 22804
+    },
+    "A14": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 22804
+    },
+    "A15": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 22804
+    },
+    "A16": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 22804
+    },
+    "A17": {
+      "below": 0.2686370812138221,
+      "above": 0.0,
+      "outside": 0.2686370812138221,
+      "rows": 22804
+    },
+    "A18": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 22804
+    },
+    "A19": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 22804
+    },
+    "A20": {
+      "below": 0.00394667602175057,
+      "above": 0.0,
+      "outside": 0.00394667602175057,
+      "rows": 22804
+    },
+    "A21": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 22804
+    },
+    "A22": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 22804
+    },
+    "A23": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 22804
+    },
+    "A24": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 22804
+    },
+    "A25": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 22804
+    },
+    "A26": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 22804
+    },
+    "A27": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 22804
+    },
+    "A28": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 22804
+    },
+    "A29": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 22804
+    },
+    "A30": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 22804
+    },
+    "A31": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 22804
+    },
+    "A32": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 22804
+    },
+    "A33": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 22804
+    },
+    "A34": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 22804
+    },
+    "A35": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 22804
+    },
+    "A36": {
+      "below": 0.04762322399579021,
+      "above": 0.0,
+      "outside": 0.04762322399579021,
+      "rows": 22804
+    },
+    "A37": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 22804
+    },
+    "A38": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 22804
+    },
+    "A39": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 22804
+    },
+    "A40": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 22804
+    },
+    "A41": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 22804
+    },
+    "A42": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 22804
+    },
+    "A43": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 22804
+    },
+    "A44": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 22804
+    },
+    "A45": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 22804
+    },
+    "A46": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 22804
+    },
+    "A47": {
+      "below": 0.004692159270303455,
+      "above": 0.0,
+      "outside": 0.004692159270303455,
+      "rows": 22804
+    },
+    "A48": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 22804
+    },
+    "A49": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 22804
+    },
+    "A50": {
+      "below": 0.2521487458340642,
+      "above": 0.0,
+      "outside": 0.2521487458340642,
+      "rows": 22804
+    },
+    "A51": {
+      "below": 0.000394667602175057,
+      "above": 0.0,
+      "outside": 0.000394667602175057,
+      "rows": 22804
+    },
+    "A52": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 22804
+    },
+    "A53": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 22804
+    },
+    "A54": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 22804
+    },
+    "A55": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 22804
+    },
+    "A56": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 22804
+    },
+    "A57": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 22804
+    },
+    "A58": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 22804
+    },
+    "A59": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 22804
+    },
+    "A60": {
+      "below": 0.08555516576039292,
+      "above": 0.0,
+      "outside": 0.08555516576039292,
+      "rows": 22804
+    },
+    "A61": {
+      "below": 0.014032625855113138,
+      "above": 0.0,
+      "outside": 0.014032625855113138,
+      "rows": 22804
+    },
+    "A62": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 22804
+    },
+    "A63": {
+      "below": 0.03315207858270479,
+      "above": 0.0,
+      "outside": 0.03315207858270479,
+      "rows": 22804
+    },
+    "A64": {
+      "below": 0.0,
+      "above": 0.0,
+      "outside": 0.0,
+      "rows": 22804
+    }
+  },
+  "out_of_range_source": "re-sampled 20,000 on-target rows from the saved model after the run; the written files came from the original sampling pass",
+  "rules_applied": [],
+  "horizon": null,
+  "imputation_fit_on": "training split"
 }

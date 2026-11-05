@@ -19,11 +19,12 @@ import numpy as np
 import pandas as pd
 from scipy.stats import ks_2samp
 
+from agentic_gan.tools.ctgan_fill import fill_paths, range_lines, selection_lines
 from agentic_gan.utils.datasets import DATASETS
 
 ROOT = Path(__file__).resolve().parents[2]
 CONFIG = DATASETS["polish"]
-TRAIN_FILE = ROOT / "data" / "interim" / CONFIG.name / "train_cleaned.csv"
+HORIZONS = tuple(name.removesuffix(".arff") for name in CONFIG.cohorts)
 SOURCE_ROW = "source_row"
 PAGE_SIZE = 16
 KS_STRUGGLE = 0.15
@@ -174,25 +175,22 @@ def _numeric_note(name: str, real: pd.Series, synthetic: pd.Series, ks: float) -
     return ". ".join(parts) + "."
 
 
-def _output_paths(version: str) -> tuple[Path, Path]:
-    folder = "artifacts_v2" if version == "v2" else "artifacts"
-    stem = "polish_ctgan_v2" if version == "v2" else "polish_ctgan"
-    artifacts = ROOT / "eda" / "ctgan_polish" / folder
-    synthetic = ROOT / "data" / "interim" / CONFIG.name / "synthetic" / f"{stem}_fill50.csv"
-    return artifacts, synthetic
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--settings", choices=["v1", "v2"], default="v1")
-    version = parser.parse_args().settings
-    artifacts, synthetic_path = _output_paths(version)
+    parser.add_argument("--horizon", choices=HORIZONS, default=None)
+    args = parser.parse_args()
+    paths = fill_paths("polish", args.settings, args.horizon)
+    artifacts = paths.artifacts
+    synthetic_path = paths.fill_file("fill50")
     meta_path = artifacts / "run_meta.json"
     if not meta_path.exists() or not synthetic_path.exists():
         raise SystemExit("run the Polish CTGAN script before diagnostics")
     meta = json.loads(meta_path.read_text())
     target = CONFIG.target
-    raw = pd.read_csv(TRAIN_FILE).drop(columns=[SOURCE_ROW])
+    raw = pd.read_csv(paths.train_file).drop(columns=[SOURCE_ROW])
+    if args.horizon is not None:
+        raw = raw.loc[raw["cohort"] == args.horizon].reset_index(drop=True)
     real = raw.loc[raw[target] == 1].reset_index(drop=True)
     synthetic = pd.read_csv(synthetic_path)
     numeric = [f"A{index}" for index in range(1, 65)]
@@ -224,13 +222,20 @@ def main() -> None:
     real_cohort = _shares(real["cohort"])
     synth_cohort = _shares(synthetic["cohort"])
 
+    horizon_note = (
+        f"horizon: {args.horizon} only (rule PB-1); {meta.get('imputation_fit_on', '')}"
+        if args.horizon is not None
+        else "horizon: all five cohorts pooled, as the cleaned table provides them"
+    )
     lines = [
         "Polish CTGAN diagnostics",
         f"settings: {meta.get('settings_version', 'v1')}, epochs {meta['epochs']}, "
         f"batch {meta['batch_size']}, pac {meta['pac']}, "
         f"discriminator steps {meta['discriminator_steps']}, seed {meta['seed']}, "
         f"device {meta['device']}",
+        horizon_note,
         "sampling: " + meta.get("sampling", "conditional on bankrupt=1"),
+        *selection_lines(meta),
         f"training seconds: {meta['train_seconds']}",
         "comparison: synthetic fill50 vs real training rows with bankrupt=1",
         f"real bankrupt rows: {len(real):,}",
@@ -271,7 +276,7 @@ def main() -> None:
     ])
     for left, right, gap in top_pairs:
         lines.append(f"  {left}, {right}: {gap:+.3f}")
-    lines.append("")
+    lines.extend(["", *range_lines(meta), ""])
 
     ranked = sorted(numeric_rows, key=lambda row: row["ks"], reverse=True)
     struggled = [row for row in ranked if row["ks"] >= KS_STRUGGLE]
