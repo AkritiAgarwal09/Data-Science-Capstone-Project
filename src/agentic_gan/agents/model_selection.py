@@ -186,6 +186,7 @@ def run_model_selection(
     if request.attempt == 1:
         # The rule is the same on every attempt; explain it once. The answer lives in the
         # decision log only and never reaches GeneratorOutput.
+        _log_skipped_routes(result, run)
         _explain(result, request, run, client)
 
     if result.status == "skipped" or not result.trainable:
@@ -266,6 +267,48 @@ def _check_class_counts(train, target, positive, positives, request: ModelSelect
         )
 
 
+def _route_reasons(result: SelectionResult) -> dict[str, str]:
+    """Why each unchosen generator lost. Reads the logged steps; does not re-run the rule."""
+    by_rule = {step.rule: step for step in result.steps}
+    stop_gate = next(
+        (
+            name
+            for name in ("size_gate", "horizon_gate", "missing_gate", "leakage_gate")
+            if by_rule.get(name) is not None and by_rule[name].outcome == "FAIL"
+        ),
+        None,
+    )
+    if stop_gate is None and result.status == "skipped":
+        stop_gate = "dcgan_excluded"
+    unchosen = [route for route in ("timegan", "wgan_gp", "ctgan") if route != result.generator]
+    if stop_gate is not None:
+        reason = (
+            f"Not evaluated: {stop_gate} stopped selection. {by_rule[stop_gate].rationale}"
+        )
+        return {route: reason for route in unchosen}
+    if result.generator == "timegan":
+        return {
+            "ctgan": "TimeGAN was selected; CTGAN is its documented fallback",
+            "wgan_gp": "TimeGAN was selected, so type routing did not run",
+        }
+    reasons = {"timegan": by_rule["temporal_test"].rationale}
+    other = "wgan_gp" if result.generator == "ctgan" else "ctgan"
+    reasons[other] = by_rule["type_routing"].rationale
+    return reasons
+
+
+def _log_skipped_routes(result: SelectionResult, run: RunDir) -> None:
+    for route, reason in _route_reasons(result).items():
+        log_decision(
+            "model_selection",
+            "route_skipped",
+            {"route": route, "attempt": 1},
+            "NOT_SELECTED",
+            reason,
+            run=run,
+        )
+
+
 def _explain(
     result: SelectionResult, request: ModelSelectionInput, run: RunDir, client
 ) -> SelectionExplanation:
@@ -277,6 +320,7 @@ def _explain(
             "status": result.status,
             "generator": expected,
             "steps": [asdict(step) for step in result.steps],
+            "routes_not_chosen": _route_reasons(result),
         },
         default=str,
     )

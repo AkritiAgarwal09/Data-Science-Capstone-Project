@@ -11,6 +11,7 @@ from agentic_gan.agents.model_selection import (
     RetrySettings,
     SelectionExplanation,
     _retry_limits,
+    _route_reasons,
     _rule_hash,
     _rule_retry,
     run_model_selection,
@@ -863,3 +864,90 @@ def test_unsupported_adjustments_are_reported_once_and_not_applied(tmp_path, gan
     # It comes before the retry line, and more_epochs produced no such line.
     assert unsupported.index[0] < _retry_lines(run).index[0]
     assert gan.trains[0][1]["epochs"] == 500
+
+
+# --- Unchosen routes: why TimeGAN / WGAN-GP / CTGAN lost ---------------------------------------
+
+
+def test_bank_mixed_skips_timegan_and_wgan_gp_only():
+    reasons = _route_reasons(select_generator(_data()))
+    assert set(reasons) == {"timegan", "wgan_gp"}
+    assert "TimeGAN is not selected" in reasons["timegan"]
+    assert "CTGAN is selected" in reasons["wgan_gp"]
+
+
+def test_default_complete_block_skips_ctgan_and_wgan_gp():
+    reasons = _route_reasons(select_generator(_data(
+        dataset="default",
+        rows=18000,
+        minority_count=4000,
+        minority_rate=4000 / 18000,
+        columns=(
+            _column("SEX", "categorical"),
+            _column("PAY_1", "categorical"),
+            _column("BILL_AMT1", "numeric"),
+            _column("y", "numeric"),
+        ),
+        entity_in_table=True,
+        wide_steps=6,
+        repeated_observation=True,
+        time_index_ready=True,
+    )))
+    assert set(reasons) == {"ctgan", "wgan_gp"}
+    assert reasons["ctgan"] == "TimeGAN was selected; CTGAN is its documented fallback"
+    assert reasons["wgan_gp"] == "TimeGAN was selected, so type routing did not run"
+
+
+def test_polish_all_numeric_skips_timegan_and_ctgan_from_type_routing():
+    reasons = _route_reasons(select_generator(_data(
+        dataset="polish",
+        rows=6000,
+        target="bankrupt",
+        minority_count=800,
+        minority_rate=800 / 6000,
+        columns=(
+            _column("A1", "numeric"),
+            _column("A2", "numeric"),
+            _column("bankrupt", "numeric"),
+        ),
+    )))
+    assert set(reasons) == {"timegan", "ctgan"}
+    assert "TimeGAN is not selected" in reasons["timegan"]
+    assert "WGAN-GP is selected" in reasons["ctgan"]
+    assert "CTGAN" in reasons["ctgan"]
+
+
+def test_too_few_rows_skips_every_route_at_the_size_gate():
+    reasons = _route_reasons(select_generator(
+        _data(rows=1500, minority_count=200, minority_rate=200 / 1500)
+    ))
+    assert set(reasons) == {"timegan", "wgan_gp", "ctgan"}
+    prefix = "Not evaluated: size_gate stopped selection."
+    assert all(reason.startswith(prefix) for reason in reasons.values())
+    assert "below min_rows" in next(iter(reasons.values()))
+
+
+def test_non_tabular_skips_every_route_at_dcgan_excluded():
+    reasons = _route_reasons(select_generator(_data(tabular=False)))
+    assert set(reasons) == {"timegan", "wgan_gp", "ctgan"}
+    assert all(
+        reason.startswith("Not evaluated: dcgan_excluded stopped selection.")
+        for reason in reasons.values()
+    )
+
+
+def test_route_skipped_is_logged_once_per_unchosen_route_on_attempt_1_only(tmp_path, gan):
+    first, run, _path = _request(tmp_path, _config(tmp_path), _bank_frame(), 500, 1500)
+    run_model_selection(first, run)
+    first_routes = read_decisions(run).query("rule == 'route_skipped'")
+    assert sorted(first_routes.inputs.map(lambda item: item["route"])) == ["timegan", "wgan_gp"]
+    assert set(first_routes.outcome) == {"NOT_SELECTED"}
+    assert (first_routes.inputs.map(lambda item: item["attempt"]) == 1).all()
+
+    second, same, _path = _request(
+        tmp_path, _config(tmp_path), _bank_frame(), 500, 1500, attempt=2,
+        previous=_fail_report("column_distance"), run_id="second",
+    )
+    run_model_selection(second, same)
+    second_routes = read_decisions(same).query("rule == 'route_skipped'")
+    assert second_routes.empty
