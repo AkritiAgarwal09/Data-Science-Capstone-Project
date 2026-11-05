@@ -1,13 +1,17 @@
 """Generator selection for Bank, Default, Polish, and IEEE-CIS, without fitting a GAN."""
 
+import json
+import os
 from pathlib import Path
 
 import pandas as pd
 import pytest
 from pydantic import ValidationError
+from test_quality_agent import V1_ANSWER, V1_DRIVERS
 
 from agentic_gan.agents.model_selection import (
     CTGAN_DEFAULTS,
+    SETTING_NAMES,
     RetrySettings,
     SelectionExplanation,
     _retry_limits,
@@ -16,7 +20,7 @@ from agentic_gan.agents.model_selection import (
     _rule_retry,
     run_model_selection,
 )
-from agentic_gan.llm import FakeLLM
+from agentic_gan.llm import FakeLLM, RuleOverrideError
 from agentic_gan.orchestrator.decisions import read_decisions
 from agentic_gan.orchestrator.manifest import create_run
 from agentic_gan.schemas import (
@@ -1242,3 +1246,158 @@ def test_route_skipped_is_logged_once_per_unchosen_route_on_attempt_1_only(tmp_p
     run_model_selection(second, same)
     second_routes = read_decisions(same).query("rule == 'route_skipped'")
     assert second_routes.empty
+
+
+# --- Rule lock, grounding, precedence, live -----------------------------------------------------
+
+STOP_GATES = ("size_gate", "horizon_gate", "missing_gate", "leakage_gate")
+LIVE_BOUNDS = {
+    "epochs": (100, 600),
+    "pac": (5, 10),
+    "discriminator_steps": (1, 3),
+    "batch_size": (100, 1000),
+}
+
+
+class _ConfigEditingLLM:
+    """Rewrites a locked config field before answering, the way the quality-agent test does."""
+
+    def __init__(self, run, answer):
+        self.run = run
+        self.answer = answer
+
+    def complete(self, system_prompt, context, output_model):
+        text = self.run.config_path.read_text()
+        self.run.config_path.write_text(text.replace("min_rows: 2000", "min_rows: 2500"))
+        return self.answer
+
+
+def test_changing_min_rows_during_the_explain_call_is_rejected(tmp_path, gan):
+    request, run, _path = _request(tmp_path, _config(tmp_path), _bank_frame(), 500, 1500)
+    with pytest.raises(RuleOverrideError):
+        run_model_selection(request, run, client=_ConfigEditingLLM(run, EXPLAIN_ANSWER))
+    assert "RULE_OVERRIDE_REJECTED" in read_decisions(run).outcome.tolist()
+    assert gan.trains == []
+
+
+def test_changing_min_rows_during_the_proposer_call_is_rejected(tmp_path, gan):
+    request, run, _path = _retry_request(tmp_path, {"epochs": (100, 600)}, "column_distance")
+    with pytest.raises(RuleOverrideError):
+        run_model_selection(request, run, client=_ConfigEditingLLM(run, _answer(epochs=500)))
+    assert "RULE_OVERRIDE_REJECTED" in read_decisions(run).outcome.tolist()
+    assert gan.trains == []
+
+
+def test_the_proposer_context_is_grounded_in_the_diagnosis_and_has_no_rows(tmp_path, gan):
+    diagnosis = QualityDiagnosis(**V1_ANSWER)
+    fake = FakeLLM([_answer(epochs=500)])
+    request, run, _path = _retry_request(
+        tmp_path,
+        {"epochs": (100, 600)},
+        "mean_column_distance",
+        "worst_column_distance",
+        "real_vs_synthetic_auc",
+        diagnosis=diagnosis,
+    )
+    run_model_selection(request, run, client=fake)
+    assert len(fake.calls) == 1
+    _prompt, context, model = fake.calls[0]
+    assert model is RetrySettings
+    assert "source_row" not in context
+    for name in V1_DRIVERS:
+        assert name in context
+    for name in V1_ANSWER["failed_checks"]:
+        assert name in context
+    assert "AUC 0.86" in context
+    payload = json.loads(context)
+    assert set(payload) == {
+        "attempt",
+        "dataset",
+        "failed_hard_checks",
+        "diagnosis",
+        "current_settings",
+        "limits",
+        "privacy_failed",
+    }
+    failed_names = [item["name"] for item in payload["failed_hard_checks"]]
+    assert failed_names == [
+        "mean_column_distance",
+        "worst_column_distance",
+        "real_vs_synthetic_auc",
+    ]
+    assert payload["diagnosis"]["likely_cause"] == V1_ANSWER["likely_cause"]
+    assert set(payload["diagnosis"]["columns"]) == set(V1_DRIVERS)
+
+
+def _multi_fail(**overrides):
+    fields = {
+        "rows": 100,
+        "minority_count": 10,
+        "minority_rate": 0.1,
+        "columns": (_column("age", "numeric", missing=5), _column("y", "numeric")),
+        "leaky_columns": ("duration",),
+        "horizons_pooled": True,
+    }
+    fields.update(overrides)
+    return _data(**fields)
+
+
+def test_several_failing_gates_stop_at_size_and_do_not_override_each_other():
+    result = select_generator(_multi_fail())
+    assert result.status == "skipped"
+    names = [step.rule for step in result.steps]
+    assert names == list(STEP_ORDER)
+    by_rule = dict(zip(names, result.steps, strict=True))
+    assert by_rule["size_gate"].outcome == "FAIL"
+    later = STEP_ORDER[STEP_ORDER.index("size_gate") + 1 :]
+    assert all(by_rule[name].outcome == "NOT_REACHED" for name in later)
+    for name in STOP_GATES:
+        assert names.count(name) == 1
+
+
+@pytest.mark.parametrize("cleared", range(len(STOP_GATES)))
+def test_clearing_earlier_gates_lets_the_next_one_stop_selection(cleared):
+    overrides = {}
+    if cleared >= 1:
+        overrides.update(rows=27126, minority_count=3173, minority_rate=3173 / 27126)
+    if cleared >= 2:
+        overrides["horizons_pooled"] = False
+    if cleared >= 3:
+        overrides["columns"] = (_column("age", "numeric"), _column("y", "numeric"))
+    expected = STOP_GATES[cleared]
+    result = select_generator(_multi_fail(**overrides))
+    names = [step.rule for step in result.steps]
+    by_rule = dict(zip(names, result.steps, strict=True))
+    assert result.status == "skipped"
+    assert by_rule[expected].outcome == "FAIL"
+    assert [name for name in STOP_GATES if by_rule[name].outcome == "FAIL"] == [expected]
+    later = STEP_ORDER[STEP_ORDER.index(expected) + 1 :]
+    assert all(by_rule[name].outcome == "NOT_REACHED" for name in later)
+    for name in STOP_GATES:
+        assert names.count(name) == 1
+
+
+@pytest.mark.live
+@pytest.mark.skipif(not os.environ.get("RUN_LIVE_LLM"), reason="set RUN_LIVE_LLM=1 to call Vertex")
+def test_live_gemini_explains_the_rule_and_proposes_a_legal_retry(tmp_path, gan):
+    """One real Vertex call per step; run with RUN_LIVE_LLM=1 and -m live."""
+    first, run, _path = _request(
+        tmp_path, _config(tmp_path), _bank_frame(), 500, 1500, run_id="live-explain",
+    )
+    explained = run_model_selection(first, run)
+    explain_step = read_decisions(run).query("rule == 'llm_step'").outcome.iloc[0]
+    assert explain_step != "LLM_FALLBACK", "the Vertex explain call failed; see decisions.jsonl"
+    assert explained.generator == "ctgan"
+    assert explain_step["generator"] == "ctgan"
+
+    second, retry_run, _path = _retry_request(
+        tmp_path, LIVE_BOUNDS, "column_distance", run_id="live-retry",
+    )
+    retried = run_model_selection(second, retry_run)
+    retry_step = read_decisions(retry_run).query("rule == 'llm_step'").outcome.iloc[-1]
+    assert retry_step != "LLM_FALLBACK", "the Vertex proposer call failed; see decisions.jsonl"
+    settings = {name: retried.hyperparameters[name] for name in SETTING_NAMES}
+    for name, (low, high) in LIVE_BOUNDS.items():
+        assert low <= settings[name] <= high
+    assert settings["batch_size"] % settings["pac"] == 0
+    assert retried.generator == "ctgan"
