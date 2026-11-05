@@ -106,7 +106,82 @@ BANK_RULES = (
     ),
 )
 
-RULES: dict[str, tuple[Rule, ...]] = {"bank_marketing": BANK_RULES}
+# Default of Credit Card Clients (rules DC-5 and DC-9). Repayment status is an ordinal code:
+# -2 and -1 are paid, 0 is revolving, 1 to 8 are months of delay. Amount paid cannot be negative.
+DEFAULT_PAY_CODES = frozenset(range(-2, 9))
+_PAY_STATUS = [f"PAY_{month}" for month in range(1, 7)]
+_PAY_AMOUNT = [f"PAY_AMT{month}" for month in range(1, 7)]
+_DEFAULT_CODE_SETS = {
+    "SEX": frozenset({1, 2}),
+    "EDUCATION": frozenset(range(0, 7)),
+    "MARRIAGE": frozenset(range(0, 4)),
+}
+
+
+def _any_column(frame: pd.DataFrame, columns: Sequence[str], test) -> pd.Series:
+    broken = pd.Series(False, index=frame.index)
+    for column in columns:
+        broken |= test(frame[column])
+    return broken
+
+
+DEFAULT_RULES = (
+    Rule(
+        "pay_status_codes",
+        "every PAY_1..PAY_6 value is a repayment code observed in the data (-2 to 8)",
+        lambda d: _any_column(d, _PAY_STATUS, lambda s: ~s.isin(DEFAULT_PAY_CODES)),
+    ),
+    Rule(
+        "pay_amount_non_negative",
+        "every PAY_AMT1..PAY_AMT6 value is zero or more",
+        lambda d: _any_column(d, _PAY_AMOUNT, lambda s: s < 0),
+    ),
+    Rule(
+        "static_codes",
+        "SEX, EDUCATION and MARRIAGE use the coded values from the source",
+        lambda d: _any_column(
+            d, list(_DEFAULT_CODE_SETS), lambda s: ~s.isin(_DEFAULT_CODE_SETS[s.name])
+        ),
+    ),
+)
+
+# Polish Bankruptcy (rule PB-9). The 64 ratios must be present and numeric, the target binary,
+# and the cohort one of the five horizon labels. Duplicate rows are handled by the sampler.
+POLISH_RATIOS = [f"A{i}" for i in range(1, 65)]
+POLISH_COHORTS = frozenset({"1year", "2year", "3year", "4year", "5year"})
+
+
+def _polish_ratio_rows_broken(d: pd.DataFrame) -> pd.Series:
+    missing = [c for c in POLISH_RATIOS if c not in d.columns]
+    if missing:
+        raise KeyError(missing[0])
+    numeric = d[POLISH_RATIOS].apply(pd.to_numeric, errors="coerce")
+    return numeric.isna().any(axis=1)
+
+
+POLISH_RULES = (
+    Rule(
+        "ratios_numeric",
+        "all 64 ratio columns A1..A64 are present and every value is a finite number",
+        _polish_ratio_rows_broken,
+    ),
+    Rule(
+        "target_binary",
+        "bankrupt is 0 or 1",
+        lambda d: ~d["bankrupt"].isin({0, 1}),
+    ),
+    Rule(
+        "cohort_label",
+        "cohort is one of the five horizon labels",
+        lambda d: ~d["cohort"].isin(POLISH_COHORTS),
+    ),
+)
+
+RULES: dict[str, tuple[Rule, ...]] = {
+    "bank_marketing": BANK_RULES,
+    "default": DEFAULT_RULES,
+    "polish": POLISH_RULES,
+}
 
 
 def rule_name(rule: Rule) -> str:

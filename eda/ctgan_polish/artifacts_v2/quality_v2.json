@@ -1,0 +1,2003 @@
+{
+  "dataset": "polish",
+  "thresholds_source": "suggested",
+  "thresholds": {
+    "mean_column_distance": 0.1,
+    "worst_column_distance": 0.175,
+    "spearman_diff": 0.075,
+    "label_balance": 0.01,
+    "schema_match": 0.0
+  },
+  "suggested_thresholds": {
+    "mean_column_distance": 0.1,
+    "worst_column_distance": 0.175,
+    "spearman_diff": 0.075,
+    "label_balance": 0.01,
+    "schema_match": 0.0
+  },
+  "real_vs_real": [
+    {
+      "name": "mean_column_distance",
+      "value": 0.0480979871460056,
+      "threshold": 0.1,
+      "passed": true,
+      "hard": true
+    },
+    {
+      "name": "worst_column_distance",
+      "value": 0.08634171448178574,
+      "threshold": 0.175,
+      "passed": true,
+      "hard": true
+    },
+    {
+      "name": "spearman_diff",
+      "value": 0.03646299426258393,
+      "threshold": 0.075,
+      "passed": true,
+      "hard": true
+    },
+    {
+      "name": "label_balance",
+      "value": 0.0,
+      "threshold": 0.01,
+      "passed": true,
+      "hard": true
+    },
+    {
+      "name": "schema_match",
+      "value": 0.0,
+      "threshold": 0.0,
+      "passed": true,
+      "hard": true
+    },
+    {
+      "name": "column_distance:cohort",
+      "value": 0.06427114508473283,
+      "threshold": 0.175,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:A1",
+      "value": 0.04014754379610741,
+      "threshold": 0.175,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:A2",
+      "value": 0.03211651003640936,
+      "threshold": 0.175,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:A3",
+      "value": 0.07276349148859118,
+      "threshold": 0.175,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:A4",
+      "value": 0.06189405059189085,
+      "threshold": 0.175,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:A5",
+      "value": 0.07554089860653082,
+      "threshold": 0.175,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:A6",
+      "value": 0.04603595188623502,
+      "threshold": 0.175,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:A7",
+      "value": 0.03302960407175126,
+      "threshold": 0.175,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:A8",
+      "value": 0.03688976152805046,
+      "threshold": 0.175,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:A9",
+      "value": 0.06582283306963538,
+      "threshold": 0.175,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:A10",
+      "value": 0.039274481023275354,
+      "threshold": 0.175,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:A11",
+      "value": 0.05218361005737826,
+      "threshold": 0.175,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:A12",
+      "value": 0.031401666063020583,
+      "threshold": 0.175,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:A13",
+      "value": 0.03223851007453432,
+      "threshold": 0.175,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:A14",
+      "value": 0.03302960407175126,
+      "threshold": 0.175,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:A15",
+      "value": 0.03424197945061858,
+      "threshold": 0.175,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:A16",
+      "value": 0.04252845079014084,
+      "threshold": 0.175,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:A17",
+      "value": 0.033620541756419375,
+      "threshold": 0.175,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:A18",
+      "value": 0.03302960407175126,
+      "threshold": 0.175,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:A19",
+      "value": 0.03335176042242513,
+      "threshold": 0.175,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:A20",
+      "value": 0.04644579576431118,
+      "threshold": 0.175,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:A21",
+      "value": 0.030395165748489328,
+      "threshold": 0.175,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:A22",
+      "value": 0.029354352923235294,
+      "threshold": 0.175,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:A23",
+      "value": 0.03300482281400707,
+      "threshold": 0.175,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:A24",
+      "value": 0.03972435616386133,
+      "threshold": 0.175,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:A25",
+      "value": 0.02977182180369431,
+      "threshold": 0.175,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:A26",
+      "value": 0.04651251453516081,
+      "threshold": 0.175,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:A27",
+      "value": 0.038481480775462706,
+      "threshold": 0.175,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:A28",
+      "value": 0.08163518176099427,
+      "threshold": 0.175,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:A29",
+      "value": 0.057904268095083644,
+      "threshold": 0.175,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:A30",
+      "value": 0.07054461579519239,
+      "threshold": 0.175,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:A31",
+      "value": 0.04211670066146897,
+      "threshold": 0.175,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:A32",
+      "value": 0.06266798833374632,
+      "threshold": 0.175,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:A33",
+      "value": 0.06190548809546503,
+      "threshold": 0.175,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:A34",
+      "value": 0.06491736403667636,
+      "threshold": 0.175,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:A35",
+      "value": 0.04102060656893958,
+      "threshold": 0.175,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:A36",
+      "value": 0.05395070435959515,
+      "threshold": 0.175,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:A37",
+      "value": 0.030904134657542104,
+      "threshold": 0.175,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:A38",
+      "value": 0.03148363483863592,
+      "threshold": 0.175,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:A39",
+      "value": 0.04286585714558039,
+      "threshold": 0.175,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:A40",
+      "value": 0.03097275967898741,
+      "threshold": 0.175,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:A41",
+      "value": 0.03653710516784525,
+      "threshold": 0.175,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:A42",
+      "value": 0.030023446882327165,
+      "threshold": 0.175,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:A43",
+      "value": 0.050544234545073286,
+      "threshold": 0.175,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:A44",
+      "value": 0.08634171448178574,
+      "threshold": 0.175,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:A45",
+      "value": 0.03617682380525744,
+      "threshold": 0.175,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:A46",
+      "value": 0.06099811281191031,
+      "threshold": 0.175,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:A47",
+      "value": 0.04449188890371514,
+      "threshold": 0.175,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:A48",
+      "value": 0.022202100688156423,
+      "threshold": 0.175,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:A49",
+      "value": 0.03169522865475899,
+      "threshold": 0.175,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:A50",
+      "value": 0.06512895785279937,
+      "threshold": 0.175,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:A51",
+      "value": 0.040422043881888636,
+      "threshold": 0.175,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:A52",
+      "value": 0.06190548809546503,
+      "threshold": 0.175,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:A53",
+      "value": 0.04903829657446768,
+      "threshold": 0.175,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:A54",
+      "value": 0.07618521130787859,
+      "threshold": 0.175,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:A55",
+      "value": 0.07075620961131551,
+      "threshold": 0.175,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:A56",
+      "value": 0.045279170399740776,
+      "threshold": 0.175,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:A57",
+      "value": 0.040111325034789036,
+      "threshold": 0.175,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:A58",
+      "value": 0.049246077889399276,
+      "threshold": 0.175,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:A59",
+      "value": 0.034017041880325616,
+      "threshold": 0.175,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:A60",
+      "value": 0.0527573914866849,
+      "threshold": 0.175,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:A61",
+      "value": 0.0783735869917459,
+      "threshold": 0.175,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:A62",
+      "value": 0.05796717436474197,
+      "threshold": 0.175,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:A63",
+      "value": 0.06593530185478186,
+      "threshold": 0.175,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:A64",
+      "value": 0.0802436188261309,
+      "threshold": 0.175,
+      "passed": true,
+      "hard": false
+    }
+  ],
+  "files": {
+    "polish_ctgan_v2_fill10": {
+      "passed": false,
+      "worst_column": "A58",
+      "n_rows": 2353,
+      "checks": [
+        {
+          "name": "mean_column_distance",
+          "value": 0.2880371521205381,
+          "threshold": 0.1,
+          "passed": false,
+          "hard": true
+        },
+        {
+          "name": "worst_column_distance",
+          "value": 0.6958163097715386,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": true
+        },
+        {
+          "name": "spearman_diff",
+          "value": 0.17828204786545193,
+          "threshold": 0.075,
+          "passed": false,
+          "hard": true
+        },
+        {
+          "name": "label_balance",
+          "value": 0.0,
+          "threshold": 0.01,
+          "passed": true,
+          "hard": true
+        },
+        {
+          "name": "schema_match",
+          "value": 0.0,
+          "threshold": 0.0,
+          "passed": true,
+          "hard": true
+        },
+        {
+          "name": "column_distance:cohort",
+          "value": 0.02419459433832879,
+          "threshold": 0.175,
+          "passed": true,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A1",
+          "value": 0.2702099379786421,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A2",
+          "value": 0.11162354407275277,
+          "threshold": 0.175,
+          "passed": true,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A3",
+          "value": 0.17702212823165486,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A4",
+          "value": 0.26753165832208775,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A5",
+          "value": 0.5165297162391658,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A6",
+          "value": 0.23343565813245115,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A7",
+          "value": 0.19168409235984252,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A8",
+          "value": 0.37320433523026464,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A9",
+          "value": 0.16857008853663122,
+          "threshold": 0.175,
+          "passed": true,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A10",
+          "value": 0.13324754530539124,
+          "threshold": 0.175,
+          "passed": true,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A11",
+          "value": 0.11163438045522961,
+          "threshold": 0.175,
+          "passed": true,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A12",
+          "value": 0.2491595877433742,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A13",
+          "value": 0.4110764760761459,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A14",
+          "value": 0.32433495935509987,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A15",
+          "value": 0.10368081435414311,
+          "threshold": 0.175,
+          "passed": true,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A16",
+          "value": 0.42574284248471483,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A17",
+          "value": 0.34355192913005855,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A18",
+          "value": 0.2672268850649252,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A19",
+          "value": 0.37033032341522143,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A20",
+          "value": 0.18186734574663527,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A21",
+          "value": 0.5811250535469681,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A22",
+          "value": 0.18451277761880658,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A23",
+          "value": 0.32741757153282325,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A24",
+          "value": 0.23052033260921473,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A25",
+          "value": 0.18074510288637208,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A26",
+          "value": 0.2574975067854379,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A27",
+          "value": 0.397104315420003,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A28",
+          "value": 0.3580628611774745,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A29",
+          "value": 0.06110839260890988,
+          "threshold": 0.175,
+          "passed": true,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A30",
+          "value": 0.5334178796924499,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A31",
+          "value": 0.280339923772822,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A32",
+          "value": 0.23110481998906202,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A33",
+          "value": 0.09553998201837782,
+          "threshold": 0.175,
+          "passed": true,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A34",
+          "value": 0.2853300779034309,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A35",
+          "value": 0.26154252518189036,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A36",
+          "value": 0.11709388540186894,
+          "threshold": 0.175,
+          "passed": true,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A37",
+          "value": 0.615012792010877,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A38",
+          "value": 0.18186057300758723,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A39",
+          "value": 0.19327839513175515,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A40",
+          "value": 0.34450722397278716,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A41",
+          "value": 0.06370675394469727,
+          "threshold": 0.175,
+          "passed": true,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A42",
+          "value": 0.12857706445785066,
+          "threshold": 0.175,
+          "passed": true,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A43",
+          "value": 0.4267553669723994,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A44",
+          "value": 0.21903850810104253,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A45",
+          "value": 0.5697549792330889,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A46",
+          "value": 0.5021881026679513,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A47",
+          "value": 0.2825803458499195,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A48",
+          "value": 0.07608596637673704,
+          "threshold": 0.175,
+          "passed": true,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A49",
+          "value": 0.19689571505732278,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A50",
+          "value": 0.24357207802872657,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A51",
+          "value": 0.05356457722023078,
+          "threshold": 0.175,
+          "passed": true,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A52",
+          "value": 0.3553442837235842,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A53",
+          "value": 0.5585498211150299,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A54",
+          "value": 0.6093880322314652,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A55",
+          "value": 0.20412087307379068,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A56",
+          "value": 0.3780918823642955,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A57",
+          "value": 0.15657353586080663,
+          "threshold": 0.175,
+          "passed": true,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A58",
+          "value": 0.6958163097715386,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A59",
+          "value": 0.37762524064388436,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A60",
+          "value": 0.5759760786856822,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A61",
+          "value": 0.05905760722515796,
+          "threshold": 0.175,
+          "passed": true,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A62",
+          "value": 0.312377688565754,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A63",
+          "value": 0.15810688398128692,
+          "threshold": 0.175,
+          "passed": true,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A64",
+          "value": 0.545686357841054,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        }
+      ]
+    },
+    "polish_ctgan_v2_fill25": {
+      "passed": false,
+      "worst_column": "A58",
+      "n_rows": 5883,
+      "checks": [
+        {
+          "name": "mean_column_distance",
+          "value": 0.2864121885605762,
+          "threshold": 0.1,
+          "passed": false,
+          "hard": true
+        },
+        {
+          "name": "worst_column_distance",
+          "value": 0.6971130944520406,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": true
+        },
+        {
+          "name": "spearman_diff",
+          "value": 0.17477180707554119,
+          "threshold": 0.075,
+          "passed": false,
+          "hard": true
+        },
+        {
+          "name": "label_balance",
+          "value": 0.0,
+          "threshold": 0.01,
+          "passed": true,
+          "hard": true
+        },
+        {
+          "name": "schema_match",
+          "value": 0.0,
+          "threshold": 0.0,
+          "passed": true,
+          "hard": true
+        },
+        {
+          "name": "column_distance:cohort",
+          "value": 0.015575163226069048,
+          "threshold": 0.175,
+          "passed": true,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A1",
+          "value": 0.2730292496510643,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A2",
+          "value": 0.10811230684943385,
+          "threshold": 0.175,
+          "passed": true,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A3",
+          "value": 0.16347108590963366,
+          "threshold": 0.175,
+          "passed": true,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A4",
+          "value": 0.2621531551848022,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A5",
+          "value": 0.5132431687494455,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A6",
+          "value": 0.23178460727885675,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A7",
+          "value": 0.17923695325785083,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A8",
+          "value": 0.37596044514784643,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A9",
+          "value": 0.1706127385748524,
+          "threshold": 0.175,
+          "passed": true,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A10",
+          "value": 0.13236491396304972,
+          "threshold": 0.175,
+          "passed": true,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A11",
+          "value": 0.11541500156098367,
+          "threshold": 0.175,
+          "passed": true,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A12",
+          "value": 0.24730640585710872,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A13",
+          "value": 0.4041694855796938,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A14",
+          "value": 0.32239249698469424,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A15",
+          "value": 0.0979296819182559,
+          "threshold": 0.175,
+          "passed": true,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A16",
+          "value": 0.414365925724266,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A17",
+          "value": 0.3449657430112966,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A18",
+          "value": 0.2625487849722985,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A19",
+          "value": 0.36996125645302536,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A20",
+          "value": 0.1858914164860192,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A21",
+          "value": 0.5708684554659147,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A22",
+          "value": 0.1731913075219097,
+          "threshold": 0.175,
+          "passed": true,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A23",
+          "value": 0.32358277242889744,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A24",
+          "value": 0.21951019650786624,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A25",
+          "value": 0.1798280276818952,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A26",
+          "value": 0.25603017134250694,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A27",
+          "value": 0.38323090436147644,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A28",
+          "value": 0.35436293242803046,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A29",
+          "value": 0.04985856336679462,
+          "threshold": 0.175,
+          "passed": true,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A30",
+          "value": 0.5170070017397688,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A31",
+          "value": 0.28379062366884666,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A32",
+          "value": 0.24267126632006736,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A33",
+          "value": 0.09670513932710434,
+          "threshold": 0.175,
+          "passed": true,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A34",
+          "value": 0.27946944162835313,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A35",
+          "value": 0.26297353506253757,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A36",
+          "value": 0.10823000704982211,
+          "threshold": 0.175,
+          "passed": true,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A37",
+          "value": 0.6165752763211982,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A38",
+          "value": 0.17938932693499338,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A39",
+          "value": 0.2026626792168399,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A40",
+          "value": 0.33104908260888116,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A41",
+          "value": 0.06266309909097256,
+          "threshold": 0.175,
+          "passed": true,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A42",
+          "value": 0.1377166838341009,
+          "threshold": 0.175,
+          "passed": true,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A43",
+          "value": 0.424095628365342,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A44",
+          "value": 0.21233183871686467,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A45",
+          "value": 0.5849670161780214,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A46",
+          "value": 0.5077387543147147,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A47",
+          "value": 0.2836363537859441,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A48",
+          "value": 0.07569694026884133,
+          "threshold": 0.175,
+          "passed": true,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A49",
+          "value": 0.1907286373797687,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A50",
+          "value": 0.24919258881523032,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A51",
+          "value": 0.055022202537800546,
+          "threshold": 0.175,
+          "passed": true,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A52",
+          "value": 0.3582955277309934,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A53",
+          "value": 0.5588302577553124,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A54",
+          "value": 0.5992121265067218,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A55",
+          "value": 0.2086614615818555,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A56",
+          "value": 0.3749829510785686,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A57",
+          "value": 0.17060745628737817,
+          "threshold": 0.175,
+          "passed": true,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A58",
+          "value": 0.6971130944520406,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A59",
+          "value": 0.3802351701472201,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A60",
+          "value": 0.5806187454838135,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A61",
+          "value": 0.047073172548629194,
+          "threshold": 0.175,
+          "passed": true,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A62",
+          "value": 0.3024861289162575,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A63",
+          "value": 0.16414234274867215,
+          "threshold": 0.175,
+          "passed": true,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A64",
+          "value": 0.5692673805881353,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        }
+      ]
+    },
+    "polish_ctgan_v2_fill50": {
+      "passed": false,
+      "worst_column": "A58",
+      "n_rows": 11766,
+      "checks": [
+        {
+          "name": "mean_column_distance",
+          "value": 0.2857362495519302,
+          "threshold": 0.1,
+          "passed": false,
+          "hard": true
+        },
+        {
+          "name": "worst_column_distance",
+          "value": 0.6936284777598768,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": true
+        },
+        {
+          "name": "spearman_diff",
+          "value": 0.17323103313671218,
+          "threshold": 0.075,
+          "passed": false,
+          "hard": true
+        },
+        {
+          "name": "label_balance",
+          "value": 0.0,
+          "threshold": 0.01,
+          "passed": true,
+          "hard": true
+        },
+        {
+          "name": "schema_match",
+          "value": 0.0,
+          "threshold": 0.0,
+          "passed": true,
+          "hard": true
+        },
+        {
+          "name": "column_distance:cohort",
+          "value": 0.01600011648121096,
+          "threshold": 0.175,
+          "passed": true,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A1",
+          "value": 0.27303954333947567,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A2",
+          "value": 0.11100198898439895,
+          "threshold": 0.175,
+          "passed": true,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A3",
+          "value": 0.16925045017956397,
+          "threshold": 0.175,
+          "passed": true,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A4",
+          "value": 0.258158594586468,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A5",
+          "value": 0.5145180285148713,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A6",
+          "value": 0.2249853551965858,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A7",
+          "value": 0.1766654273607593,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A8",
+          "value": 0.37740528621532904,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A9",
+          "value": 0.17010279466868208,
+          "threshold": 0.175,
+          "passed": true,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A10",
+          "value": 0.13763433432680972,
+          "threshold": 0.175,
+          "passed": true,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A11",
+          "value": 0.11855965564903398,
+          "threshold": 0.175,
+          "passed": true,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A12",
+          "value": 0.23921089397297768,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A13",
+          "value": 0.3968602895912525,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A14",
+          "value": 0.31783489871890985,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A15",
+          "value": 0.0946996308493715,
+          "threshold": 0.175,
+          "passed": true,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A16",
+          "value": 0.4126025220891041,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A17",
+          "value": 0.34870533165654566,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A18",
+          "value": 0.2543896824735734,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A19",
+          "value": 0.3650317986933789,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A20",
+          "value": 0.18238993710691825,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A21",
+          "value": 0.5780076701522991,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A22",
+          "value": 0.16987667213180258,
+          "threshold": 0.175,
+          "passed": true,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A23",
+          "value": 0.3370962859424109,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A24",
+          "value": 0.21646245207847858,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A25",
+          "value": 0.17606886748433764,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A26",
+          "value": 0.2606196664980398,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A27",
+          "value": 0.3832093011601394,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A28",
+          "value": 0.3492634933663273,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A29",
+          "value": 0.042166401536468445,
+          "threshold": 0.175,
+          "passed": true,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A30",
+          "value": 0.5147229541802195,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A31",
+          "value": 0.2767363996334905,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A32",
+          "value": 0.23662562058412617,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A33",
+          "value": 0.09246508780448492,
+          "threshold": 0.175,
+          "passed": true,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A34",
+          "value": 0.27335011475430926,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A35",
+          "value": 0.25164858160423076,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A36",
+          "value": 0.1078900444457086,
+          "threshold": 0.175,
+          "passed": true,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A37",
+          "value": 0.6243094255647815,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A38",
+          "value": 0.17862441107573784,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A39",
+          "value": 0.2027476698678683,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A40",
+          "value": 0.33878323185246434,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A41",
+          "value": 0.0589552041705691,
+          "threshold": 0.175,
+          "passed": true,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A42",
+          "value": 0.14324107615094606,
+          "threshold": 0.175,
+          "passed": true,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A43",
+          "value": 0.42570015704646996,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A44",
+          "value": 0.20655247444693436,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A45",
+          "value": 0.5859550071006134,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A46",
+          "value": 0.5046685940243785,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A47",
+          "value": 0.28126731557536644,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A48",
+          "value": 0.07119243576433687,
+          "threshold": 0.175,
+          "passed": true,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A49",
+          "value": 0.19302338495753518,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A50",
+          "value": 0.25641679415264323,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A51",
+          "value": 0.05290772995050225,
+          "threshold": 0.175,
+          "passed": true,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A52",
+          "value": 0.3617801444231573,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A53",
+          "value": 0.5589362421129692,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A54",
+          "value": 0.6028766118595481,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A55",
+          "value": 0.2090444274237403,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A56",
+          "value": 0.37239165046426564,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A57",
+          "value": 0.1693113996504209,
+          "threshold": 0.175,
+          "passed": true,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A58",
+          "value": 0.6936284777598768,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A59",
+          "value": 0.3838897681414407,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A60",
+          "value": 0.5797900358450611,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A61",
+          "value": 0.04681820059554409,
+          "threshold": 0.175,
+          "passed": true,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A62",
+          "value": 0.3080105212331027,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A63",
+          "value": 0.1653855087892523,
+          "threshold": 0.175,
+          "passed": true,
+          "hard": false
+        },
+        {
+          "name": "column_distance:A64",
+          "value": 0.571392146863845,
+          "threshold": 0.175,
+          "passed": false,
+          "hard": false
+        }
+      ]
+    }
+  }
+}
