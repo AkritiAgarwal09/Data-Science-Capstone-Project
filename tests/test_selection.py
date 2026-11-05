@@ -684,6 +684,91 @@ def test_first_attempt_asks_the_llm_to_explain_and_logs_the_answer(tmp_path, gan
     }
 
 
+def _llm_steps(run):
+    return read_decisions(run).query("rule == 'llm_step' and agent == 'model_selection'")
+
+
+EXPLAIN_ANSWER = {"generator": "ctgan", "explanation": "Mixed columns, so CTGAN."}
+
+
+def test_explanation_does_not_change_the_generator_output(tmp_path, gan):
+    fake = FakeLLM([EXPLAIN_ANSWER])
+    explained, run, _path = _request(
+        tmp_path, _config(tmp_path), _bank_frame(), 500, 1500, run_id="explained",
+    )
+    with_llm = run_model_selection(explained, run, client=fake)
+    plain, other, _path = _request(
+        tmp_path, _config(tmp_path), _bank_frame(), 500, 1500, run_id="plain",
+    )
+    without = run_model_selection(plain, other)
+    assert len(fake.calls) == 1
+    assert fake.calls[0][2] is SelectionExplanation
+    assert _llm_steps(run).outcome.iloc[0] == EXPLAIN_ANSWER
+    assert with_llm.generator == without.generator == "ctgan"
+    assert with_llm.hyperparameters == without.hyperparameters
+    assert [item.rows for item in with_llm.synthetic_sets] == [
+        item.rows for item in without.synthetic_sets
+    ]
+
+
+def test_explanation_falls_back_when_the_llm_is_down(tmp_path, gan):
+    fake = FakeLLM([RuntimeError("offline"), RuntimeError("offline")])
+    request, run, _path = _request(tmp_path, _config(tmp_path), _bank_frame(), 500, 1500)
+    output = run_model_selection(request, run, client=fake)
+    assert len(fake.calls) == 2
+    assert _logged(run, "llm_step") == "LLM_FALLBACK"
+    assert output.generator == "ctgan"
+    assert output.status is Status.SUCCESS
+
+
+def test_an_explanation_that_names_another_generator_is_rejected(tmp_path, gan):
+    wrong = {"generator": "wgan_gp", "explanation": "All numeric, so WGAN-GP."}
+    fake = FakeLLM([wrong, wrong])
+    request, run, _path = _request(tmp_path, _config(tmp_path), _bank_frame(), 500, 1500)
+    output = run_model_selection(request, run, client=fake)
+    assert len(fake.calls) == 2
+    assert _logged(run, "llm_step") == "LLM_FALLBACK"
+    assert output.generator == "ctgan"
+
+
+def test_a_skipped_selection_is_still_explained(tmp_path, gan):
+    fake = FakeLLM([{"generator": "none", "explanation": "Too few rows for a GAN."}])
+    frame = _bank_frame(rows=100, positives=20)
+    request, run, _path = _request(tmp_path, _config(tmp_path), frame, 20, 80)
+    output = run_model_selection(request, run, client=fake)
+    assert len(fake.calls) == 1
+    assert fake.calls[0][2] is SelectionExplanation
+    assert len(_llm_steps(run)) == 1
+    assert _llm_steps(run).outcome.iloc[0]["generator"] == "none"
+    assert output.status is Status.SKIPPED
+    assert gan.trains == []
+
+
+def test_a_retry_does_not_ask_for_an_explanation(tmp_path, gan):
+    fake = FakeLLM([PROPOSAL])
+    request, run, _path = _retry_request(tmp_path, {"epochs": (100, 600)}, "column_distance")
+    run_model_selection(request, run, client=fake)
+    assert len(fake.calls) == 1
+    assert fake.calls[0][2] is RetrySettings
+
+
+def test_timegan_explanation_must_echo_timegan(tmp_path, gan):
+    rows, positives = 2000, 600
+    frame = pd.DataFrame({name: range(rows) for name in DEFAULT_WIDE_TEMPORAL})
+    frame["SEX"] = 1
+    frame["y"] = _labels(rows, positives)
+    config = _config(tmp_path, dataset_name="default", target="y", positive_class=1)
+    request, run, _path = _request(tmp_path, config, frame, positives, rows - positives)
+    fake = FakeLLM([{"generator": "timegan", "explanation": "The monthly block is a sequence."}])
+    output = run_model_selection(request, run, client=fake)
+    assert len(fake.calls) == 1
+    assert fake.calls[0][2] is SelectionExplanation
+    assert _llm_steps(run).outcome.iloc[0]["generator"] == "timegan"
+    assert output.generator == "timegan"
+    assert output.status is Status.SKIPPED
+    assert gan.trains == []
+
+
 # --- Retry limits: what the LLM proposer may move ---------------------------------------------
 
 PINNED = {name: (value, value) for name, value in CTGAN_DEFAULTS.items()}
