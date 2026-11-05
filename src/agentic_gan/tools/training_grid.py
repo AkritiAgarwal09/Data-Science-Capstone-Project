@@ -49,9 +49,7 @@ def build_request(
     ``ctgan_prefix`` + the fill level as a whole percent + ``.csv`` names each CTGAN file.
     """
     config = DATASETS[dataset]
-    if config.name == "ieee_cis":
-        raise NotImplementedError("IEEE-CIS needs its local files and a time split; not wired yet")
-    source = ROOT / config.file
+    source = ROOT / config.file  # IEEE-CIS: the local file, joined to the identity table below
     cfg = RunConfig(
         dataset_name=dataset,
         dataset_path=source,
@@ -63,14 +61,19 @@ def build_request(
     run = create_run(cfg, runs_dir=runs_dir)
 
     raw = load_dataset(config, source)
-    splits = split_dataset(normalize(raw, config, config.include_duration), config)
+    # IEEE-CIS splits the joined table by time and samples the training rows, as its
+    # preprocessing does; the other datasets are normalized first.
+    frame = raw if config.name == "ieee_cis" else normalize(raw, config, config.include_duration)
+    splits = split_dataset(frame, config)
     arms = {}
     for arm, tables in (
         ("raw", {part: raw.loc[ids] for part, ids in splits.items()}),
         (
             "baseline",
             {
-                part: pd.read_csv(ROOT / "data" / "interim" / dataset / f"{part}_cleaned.csv")
+                part: pd.read_csv(
+                    ROOT / "data" / "interim" / dataset / f"{part}_cleaned.csv", low_memory=False
+                )
                 for part in PARTS
             },
         ),

@@ -5,6 +5,7 @@ import pytest
 
 from agentic_gan.schemas import Status
 from agentic_gan.tools.training_grid import (
+    ROOT,
     build_request,
     check_no_synthetic_in_holdouts,
     save_results,
@@ -66,6 +67,10 @@ def test_save_results_replaces_one_dataset_and_keeps_the_others(tmp_path):
     assert len(times) == 2
 
 
-def test_ieee_cis_is_not_wired_yet(tmp_path):
-    with pytest.raises(NotImplementedError, match="IEEE-CIS"):
+@pytest.mark.skipif(
+    (ROOT / "data" / "external" / "train_transaction.csv").exists(),
+    reason="the IEEE-CIS files are present",
+)
+def test_ieee_cis_needs_its_local_files(tmp_path):
+    with pytest.raises(FileNotFoundError):
         build_request("ieee_cis", [42], runs_dir=tmp_path)
