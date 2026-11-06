@@ -65,6 +65,23 @@ difference 0.119, Cramer's V difference 0.070. The worst columns are `C11` (0.73
 settings, so a quality-gate run and the Bank-style fixes (v2 settings, raking) are the next step.
 Memorization with 3,383 rows has not been checked.
 
+## Which table these numbers are for
+
+The timings above are for the cleaned tables from `tools.preprocessing --dataset ieee_cis`. They
+keep the 50 most common values of each category column plus `__missing__` and `__other__`
+(`IEEE_CATEGORY_LIMIT`), so CTGAN's width is 1,710 to 1,818.
+
+The end-to-end note (`docs/notes/e2e_ieee_cis.md`, #85) measured the table the pipeline's own
+preprocessing agent builds: 181 columns and a one-hot width of 8,648, because `card1` alone keeps
+7,663 categories. It estimated 35 hours for 100,000 rows. Both are right for their table. That
+note's fix, "bucket `card1`, `card2`, `addr1` and the other high-cardinality columns", is what the
+cleaned tables above already do.
+
+If CTGAN were trained on the un-bucketed pipeline table, the cost per row per epoch would be the
+0.0042 s that #85 measured. The fraud-only run (3,383 rows, 300 epochs) would then take about 71
+minutes, over the 60-minute limit. That is an extrapolation, not a run. So the pipeline should train
+CTGAN on the cleaned tables above, or apply the same 50-category cap first.
+
 ## Not done
 
 - **The pipeline does not use these settings yet.** `agents/model_selection.py::_train_ctgan` trains
