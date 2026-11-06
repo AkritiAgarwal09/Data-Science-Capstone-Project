@@ -319,6 +319,51 @@ def test_category_cap_reserved_buckets_and_missing_values(ieee):
     assert processor.clean(shifted).card1.eq(p.OTHER_CATEGORY).all()
 
 
+def _train_with_a_missing_category(cfg, tx):
+    data = p.load_dataset(cfg, tx)
+    train = data.loc[p.split_dataset(data, cfg)["train"]].copy()
+    train["card1"] = train["card1"].astype(object)
+    train.loc[train.index[0], "card1"] = np.nan  # cleaning turns this into the missing bucket
+    return train
+
+
+def test_fitting_on_a_cleaned_table_matches_the_original_encoder(ieee):
+    cfg, tx, *_ = ieee
+    train = _train_with_a_missing_category(cfg, tx)
+    original = p.Preprocessor(cfg).fit(train)
+    cleaned = original.clean(train)
+    assert (cleaned.card1 == p.MISSING_CATEGORY).any()  # the reserved bucket is in the input
+    refit = p.Preprocessor(cfg, from_cleaned=True).fit(cleaned)
+    assert refit.feature_names == original.feature_names
+    assert refit.category_levels == original.category_levels
+    np.testing.assert_allclose(
+        refit.transform_features(cleaned).toarray(),
+        original.transform_features(cleaned).toarray(),
+    )
+
+
+def test_raw_data_with_a_reserved_bucket_value_is_still_rejected(ieee):
+    cfg, tx, *_ = ieee
+    train = _train_with_a_missing_category(cfg, tx)
+    train.loc[train.index[1], "card1"] = p.OTHER_CATEGORY
+    with pytest.raises(ValueError, match="Reserved categorical bucket"):
+        p.Preprocessor(cfg).fit(train)
+
+
+def test_training_encoder_fits_cleaned_ieee_rows_with_reserved_buckets(ieee):
+    cfg, tx, *_ = ieee
+    train = _train_with_a_missing_category(cfg, tx)
+    cleaned = p.Preprocessor(cfg).fit(train).clean(train)
+    y = cleaned[cfg.target]
+    features = cleaned.drop(columns=cfg.target).assign(is_synthetic=0)
+    encoder = training_agent.ArmEncoder(cfg).fit(features, y)
+    matrix = encoder.transform(features)
+    assert sparse.issparse(matrix) or isinstance(matrix, np.ndarray)
+    assert matrix.shape[0] == len(cleaned) and np.isfinite(
+        matrix.toarray() if sparse.issparse(matrix) else matrix
+    ).all()
+
+
 def test_full_artifact_roundtrip_and_column_log(ieee):
     cfg, tx, _, config_path, root = ieee
     raw = p.load_dataset(cfg, tx)

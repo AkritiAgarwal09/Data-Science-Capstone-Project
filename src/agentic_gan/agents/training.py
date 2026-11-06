@@ -387,8 +387,9 @@ class ArmEncoder(TransformerMixin, BaseEstimator):
             ).fit(data)
         else:
             data[self.config.target] = np.asarray(y)[real]
+            # These are cleaned tables, so IEEE-CIS rows already hold its reserved buckets.
             self.encoder_ = Preprocessor(
-                self.config, self.config.imputation, self.config.include_duration
+                self.config, self.config.imputation, self.config.include_duration, from_cleaned=True
             ).fit(data)
         return self
 
