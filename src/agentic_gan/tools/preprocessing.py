@@ -258,12 +258,21 @@ def profile_dataframe(data: pd.DataFrame) -> dict:
 class Preprocessor:
     """Training-fitted cleaning and encoding, reusable after serialization."""
 
-    def __init__(self, config: DatasetConfig, imputation="median", include_duration=False):
+    def __init__(
+        self,
+        config: DatasetConfig,
+        imputation="median",
+        include_duration=False,
+        from_cleaned=False,
+    ):
         if imputation not in ("median", "mean"):
             raise ValueError("imputation must be median or mean")
         self.config = config
         self.imputation = imputation
         self.include_duration = include_duration
+        # True when fit() gets an already-cleaned table (IEEE-CIS), which holds the reserved
+        # missing/other buckets; they are then left out of the category counts.
+        self.from_cleaned = from_cleaned
 
     def fit(self, raw_train: pd.DataFrame):
         if self.config.name == "ieee_cis":
@@ -334,9 +343,10 @@ class Preprocessor:
         for c in self.value_columns:
             if c in self.discrete:
                 values = features[c].dropna().map(_category_string)
-                if values.isin([MISSING_CATEGORY, OTHER_CATEGORY]).any():
+                reserved = values.isin([MISSING_CATEGORY, OTHER_CATEGORY])
+                if reserved.any() and not self.from_cleaned:
                     raise ValueError(f"Reserved categorical bucket appears in source column {c}")
-                counts = values.value_counts()
+                counts = values[~reserved].value_counts()
                 self.category_levels[c] = sorted(counts.index, key=lambda v: (-counts[v], v))[
                     :IEEE_CATEGORY_LIMIT
                 ]
