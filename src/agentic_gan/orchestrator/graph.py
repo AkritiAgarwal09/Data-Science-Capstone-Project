@@ -142,7 +142,9 @@ def build_graph(agents=None, *, llm=None):
                     next_manifest = manifest.register(run, stage, result)
                     next_manifest.save(run)
                     run_state = run_state.finish(stage, Status.SKIPPED, result.reason)
-                    run_state = run_state.skip(Stage.QUALITY_CHECK, result.reason)
+                    quality = run_state.stages[Stage.QUALITY_CHECK]
+                    if quality.status is None and not quality.running and quality.attempts == 0:
+                        run_state = run_state.skip(Stage.QUALITY_CHECK, result.reason)
                     run_state = run_state.with_gan(False, result.reason)
                     run_state.save(run.state_path)
                     log_decision(

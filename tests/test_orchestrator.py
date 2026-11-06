@@ -131,6 +131,35 @@ def test_skipped_selection_skips_quality_and_continues(tmp_path):
     assert run.load_manifest().verify(run) == []
 
 
+def test_unimplemented_fallback_after_quality_leaves_the_finished_stage(tmp_path):
+    """Attempt 3 may skip the generator after quality ran. Must not try to skip quality again."""
+    agents = default_agents()
+    calls = {"n": 0}
+
+    def select(request, run):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            return StubAgent(Stage.MODEL_SELECTION)(request, run)
+        return GeneratorOutput(
+            status=Status.SKIPPED,
+            reason="Attempt 3 uses fallback wgan_gp, which is not implemented.",
+            generator="wgan_gp",
+            rationale="Attempt 3 uses fallback wgan_gp, which is not implemented.",
+        )
+
+    agents[Stage.MODEL_SELECTION] = select
+    agents[Stage.QUALITY_CHECK] = StubAgent(
+        Stage.QUALITY_CHECK, failures=-1, failure_mode="quality"
+    )
+    state, _run = run_pipeline(config(tmp_path), runs_dir=tmp_path / "runs", agents=agents)
+    assert state.failed_stage is None
+    assert state.status(Stage.MODEL_SELECTION) is Status.SKIPPED
+    assert state.status(Stage.QUALITY_CHECK) is Status.SUCCESS
+    assert state.attempts(Stage.QUALITY_CHECK) == 2
+    assert state.gan_available is False
+    assert state.status(Stage.TRAINING) is Status.SUCCESS
+
+
 def test_stage_error_then_pass(tmp_path):
     agents = default_agents()
     agents[Stage.TRAINING] = StubAgent(Stage.TRAINING, failures=1)
