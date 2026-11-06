@@ -1,25 +1,46 @@
 """Generator selection for Bank, Default, Polish, and IEEE-CIS, without fitting a GAN."""
 
+import json
+import os
+from functools import partial
 from pathlib import Path
 
 import pandas as pd
 import pytest
+from pydantic import ValidationError
+from test_quality_agent import V1_ANSWER, V1_DRIVERS
 
-from agentic_gan.agents.model_selection import run_model_selection
+import agentic_gan.orchestrator.graph as graph_module
+from agentic_gan.agents.model_selection import (
+    CTGAN_DEFAULTS,
+    SETTING_NAMES,
+    RetrySettings,
+    SelectionExplanation,
+    _retry_limits,
+    _route_reasons,
+    _rule_hash,
+    _rule_retry,
+    run_model_selection,
+)
+from agentic_gan.llm import FakeLLM, RuleOverrideError
 from agentic_gan.orchestrator.decisions import read_decisions
 from agentic_gan.orchestrator.manifest import create_run
+from agentic_gan.orchestrator.stubs import default_agents
 from agentic_gan.schemas import (
     ArmFiles,
     CheckResult,
     LevelReport,
     ModelSelectionInput,
     PreprocessOutput,
+    QualityDiagnosis,
     QualityReport,
     RunConfig,
+    Stage,
     Status,
     Verdict,
     fill_rows,
 )
+from agentic_gan.tools.quality_privacy import PRIVACY_CHECKS
 from agentic_gan.tools.selection import (
     DATASET_STRUCTURE,
     DEFAULT_WIDE_TEMPORAL,
@@ -398,15 +419,17 @@ def _reads(monkeypatch):
     return seen
 
 
-def _fail_report(*names):
+def _fail_report(*names, diagnosis=None):
     checks = [
         CheckResult(name=name, value=1.0, threshold=0.1, passed=False) for name in names
     ]
+    assert all(check.hard for check in checks)
     return QualityReport(
         status=Status.SUCCESS,
         verdict=Verdict.FAIL,
         levels=[LevelReport(fill_level=0.25, passed=False, checks=checks)],
         report_path=Path("quality.json"),
+        diagnosis=diagnosis,
     )
 
 
@@ -546,6 +569,34 @@ def test_privacy_failure_does_not_add_epochs(tmp_path, gan):
     assert _logged(run, "retry_unchanged") == "UNCHANGED"
 
 
+def test_exact_train_copies_does_not_add_epochs(tmp_path, gan):
+    # The old substring match ("dcr", "duplicate", "privacy") missed this check name.
+    config = _config(tmp_path, gan_bounds={"epochs": (100, 600)})
+    request, run, _path = _request(
+        tmp_path, config, _bank_frame(), 500, 1500, attempt=2,
+        previous=_fail_report("column_distance", "exact_train_copies"),
+    )
+    run_model_selection(request, run)
+    assert gan.trains[0][1]["epochs"] == 300
+    assert _logged(run, "retry_unchanged") == "UNCHANGED"
+
+
+def test_privacy_check_names_are_pinned():
+    assert PRIVACY_CHECKS == {"exact_train_copies", "synthetic_duplicates", "dcr_ratio"}
+
+
+@pytest.mark.parametrize("check", sorted(PRIVACY_CHECKS))
+def test_every_privacy_check_name_blocks_more_epochs(tmp_path, gan, check):
+    config = _config(tmp_path, gan_bounds={"epochs": (100, 600)})
+    request, run, _path = _request(
+        tmp_path, config, _bank_frame(), 500, 1500, attempt=2,
+        previous=_fail_report("column_distance", check),
+    )
+    run_model_selection(request, run)
+    assert gan.trains[0][1]["epochs"] == 300
+    assert _logged(run, "retry_unchanged") == "UNCHANGED"
+
+
 def test_third_attempt_documents_wgan_and_does_not_train(tmp_path, gan):
     frame = _bank_frame()
     request, run, _path = _request(
@@ -587,3 +638,832 @@ def _logged(run, rule):
     matched = read_decisions(run).query("rule == @rule")
     assert len(matched) >= 1
     return matched.outcome.iloc[-1]
+
+
+# --- LLM step scaffolding: output models and the locked rule hash -----------------------------
+
+
+def test_rule_hash_is_stable_for_equal_configs_and_moves_with_the_locked_fields(tmp_path):
+    base = _config(tmp_path, gan_bounds={"epochs": (100, 600)})
+    same = _config(tmp_path, gan_bounds={"epochs": (100, 600)})
+    assert _rule_hash(base) == _rule_hash(same)
+    assert _rule_hash(base) != _rule_hash(_config(tmp_path, min_rows=2500,
+                                                  gan_bounds={"epochs": (100, 600)}))
+    assert _rule_hash(base) != _rule_hash(_config(tmp_path, gan_bounds={"epochs": (100, 700)}))
+    assert _rule_hash(base) != _rule_hash(_config(tmp_path, gan_bounds={"pac": (5, 10),
+                                                                        "epochs": (100, 600)}))
+
+
+def test_rule_hash_survives_the_config_yaml_round_trip(tmp_path):
+    config = _config(tmp_path, min_rows=1500, gan_bounds={"epochs": (100, 600), "pac": (5, 10)})
+    run = create_run(config, run_id="hash", runs_dir=tmp_path / "runs")
+    assert _rule_hash(run.load_config()) == _rule_hash(config)
+
+
+def test_selection_explanation_rejects_unknown_fields_and_empty_text():
+    SelectionExplanation(generator="ctgan", explanation="Mixed column types, so CTGAN.")
+    with pytest.raises(ValidationError):
+        SelectionExplanation(generator="ctgan", explanation="")
+    with pytest.raises(ValidationError):
+        SelectionExplanation(generator="ctgan", explanation="ok", rule="type_routing")
+    with pytest.raises(ValidationError):
+        SelectionExplanation(explanation="no generator given")
+
+
+def test_retry_settings_reject_unknown_fields_and_an_empty_reason():
+    RetrySettings(epochs=400, pac=10, discriminator_steps=1, batch_size=500, reason="more epochs")
+    with pytest.raises(ValidationError):
+        RetrySettings(epochs=400, pac=10, discriminator_steps=1, batch_size=500, reason="")
+    with pytest.raises(ValidationError):
+        RetrySettings(
+            epochs=400, pac=10, discriminator_steps=1, batch_size=500, reason="ok", seed=1
+        )
+    with pytest.raises(ValidationError):
+        RetrySettings(epochs=400, pac=10, discriminator_steps=1, reason="missing batch_size")
+
+
+# --- Explanation step ----------------------------------------------------------------------------
+
+
+def test_first_attempt_asks_the_llm_to_explain_and_logs_the_answer(tmp_path, gan):
+    fake = FakeLLM([{"generator": "ctgan", "explanation": "Mixed columns, so CTGAN."}])
+    request, run, _path = _request(tmp_path, _config(tmp_path), _bank_frame(), 500, 1500)
+    output = run_model_selection(request, run, client=fake)
+    assert len(fake.calls) == 1
+    assert output.generator == "ctgan"
+    steps = read_decisions(run).query("rule == 'llm_step' and agent == 'model_selection'")
+    assert len(steps) == 1
+    assert steps.outcome.iloc[0] == {
+        "generator": "ctgan", "explanation": "Mixed columns, so CTGAN."
+    }
+
+
+def _llm_steps(run):
+    return read_decisions(run).query("rule == 'llm_step' and agent == 'model_selection'")
+
+
+EXPLAIN_ANSWER = {"generator": "ctgan", "explanation": "Mixed columns, so CTGAN."}
+
+
+def test_explanation_does_not_change_the_generator_output(tmp_path, gan):
+    fake = FakeLLM([EXPLAIN_ANSWER])
+    explained, run, _path = _request(
+        tmp_path, _config(tmp_path), _bank_frame(), 500, 1500, run_id="explained",
+    )
+    with_llm = run_model_selection(explained, run, client=fake)
+    plain, other, _path = _request(
+        tmp_path, _config(tmp_path), _bank_frame(), 500, 1500, run_id="plain",
+    )
+    without = run_model_selection(plain, other)
+    assert len(fake.calls) == 1
+    assert fake.calls[0][2] is SelectionExplanation
+    assert _llm_steps(run).outcome.iloc[0] == EXPLAIN_ANSWER
+    assert with_llm.generator == without.generator == "ctgan"
+    assert with_llm.hyperparameters == without.hyperparameters
+    assert [item.rows for item in with_llm.synthetic_sets] == [
+        item.rows for item in without.synthetic_sets
+    ]
+
+
+def test_explanation_falls_back_when_the_llm_is_down(tmp_path, gan):
+    fake = FakeLLM([RuntimeError("offline"), RuntimeError("offline")])
+    request, run, _path = _request(tmp_path, _config(tmp_path), _bank_frame(), 500, 1500)
+    output = run_model_selection(request, run, client=fake)
+    assert len(fake.calls) == 2
+    assert _logged(run, "llm_step") == "LLM_FALLBACK"
+    assert output.generator == "ctgan"
+    assert output.status is Status.SUCCESS
+
+
+def test_an_explanation_that_names_another_generator_is_rejected(tmp_path, gan):
+    wrong = {"generator": "wgan_gp", "explanation": "All numeric, so WGAN-GP."}
+    fake = FakeLLM([wrong, wrong])
+    request, run, _path = _request(tmp_path, _config(tmp_path), _bank_frame(), 500, 1500)
+    output = run_model_selection(request, run, client=fake)
+    assert len(fake.calls) == 2
+    assert _logged(run, "llm_step") == "LLM_FALLBACK"
+    assert output.generator == "ctgan"
+
+
+def test_a_skipped_selection_is_still_explained(tmp_path, gan):
+    fake = FakeLLM([{"generator": "none", "explanation": "Too few rows for a GAN."}])
+    frame = _bank_frame(rows=100, positives=20)
+    request, run, _path = _request(tmp_path, _config(tmp_path), frame, 20, 80)
+    output = run_model_selection(request, run, client=fake)
+    assert len(fake.calls) == 1
+    assert fake.calls[0][2] is SelectionExplanation
+    assert len(_llm_steps(run)) == 1
+    assert _llm_steps(run).outcome.iloc[0]["generator"] == "none"
+    assert output.status is Status.SKIPPED
+    assert gan.trains == []
+
+
+def test_a_retry_does_not_ask_for_an_explanation(tmp_path, gan):
+    fake = FakeLLM([PROPOSAL])
+    request, run, _path = _retry_request(tmp_path, {"epochs": (100, 600)}, "column_distance")
+    run_model_selection(request, run, client=fake)
+    assert len(fake.calls) == 1
+    assert fake.calls[0][2] is RetrySettings
+
+
+def test_timegan_explanation_must_echo_timegan(tmp_path, gan):
+    rows, positives = 2000, 600
+    frame = pd.DataFrame({name: range(rows) for name in DEFAULT_WIDE_TEMPORAL})
+    frame["SEX"] = 1
+    frame["y"] = _labels(rows, positives)
+    config = _config(tmp_path, dataset_name="default", target="y", positive_class=1)
+    request, run, _path = _request(tmp_path, config, frame, positives, rows - positives)
+    fake = FakeLLM([{"generator": "timegan", "explanation": "The monthly block is a sequence."}])
+    output = run_model_selection(request, run, client=fake)
+    assert len(fake.calls) == 1
+    assert fake.calls[0][2] is SelectionExplanation
+    assert _llm_steps(run).outcome.iloc[0]["generator"] == "timegan"
+    assert output.generator == "timegan"
+    assert output.status is Status.SKIPPED
+    assert gan.trains == []
+
+
+# --- Retry limits: what the LLM proposer may move ---------------------------------------------
+
+PINNED = {name: (value, value) for name, value in CTGAN_DEFAULTS.items()}
+
+
+def test_retry_limits_are_none_when_nothing_is_bounded():
+    assert _retry_limits(CTGAN_DEFAULTS, {}, privacy=False) is None
+    assert _retry_limits(CTGAN_DEFAULTS, {}, privacy=True) is None
+
+
+def test_retry_limits_open_only_the_bounded_setting():
+    limits = _retry_limits(CTGAN_DEFAULTS, {"epochs": (100, 600)}, privacy=False)
+    assert limits == {**PINNED, "epochs": (100, 600)}
+
+
+def test_retry_limits_cap_epochs_at_the_current_value_after_a_privacy_failure():
+    limits = _retry_limits(CTGAN_DEFAULTS, {"epochs": (100, 600)}, privacy=True)
+    assert limits == {**PINNED, "epochs": (100, CTGAN_DEFAULTS["epochs"])}
+
+
+def test_retry_limits_round_fractional_edges_inward_to_integers():
+    limits = _retry_limits(CTGAN_DEFAULTS, {"epochs": (99.5, 600.4)}, privacy=False)
+    assert limits["epochs"] == (100, 600)
+    assert all(isinstance(edge, int) for edge in limits["epochs"])
+
+
+def test_retry_limits_return_every_bounded_range():
+    bounds = {
+        "epochs": (100, 600),
+        "pac": (5, 10),
+        "discriminator_steps": (1, 3),
+        "batch_size": (100, 1000),
+    }
+    assert _retry_limits(CTGAN_DEFAULTS, bounds, privacy=False) == bounds
+
+
+def test_retry_limits_pin_a_setting_whose_bound_cannot_hold_it():
+    # No integer between 10.2 and 10.8; and 300 epochs lies outside (400, 600).
+    limits = _retry_limits(
+        CTGAN_DEFAULTS, {"pac": (10.2, 10.8), "epochs": (400, 600), "batch_size": (100, 1000)},
+        privacy=False,
+    )
+    assert limits["pac"] == (10, 10)
+    assert limits["epochs"] == (300, 300)
+    assert limits["batch_size"] == (100, 1000)
+
+
+# --- Retry proposer ------------------------------------------------------------------------------
+
+PROPOSAL = {"epochs": 500, "pac": 10, "discriminator_steps": 1, "batch_size": 500,
+            "reason": "more training"}
+
+
+def _retry_request(tmp_path, gan_bounds, *failed, diagnosis=None, run_id="sel"):
+    config = _config(tmp_path, gan_bounds=gan_bounds)
+    return _request(
+        tmp_path, config, _bank_frame(), 500, 1500, attempt=2,
+        previous=_fail_report(*failed, diagnosis=diagnosis), run_id=run_id,
+    )
+
+
+@pytest.mark.parametrize(
+    ("gan_bounds", "failed"),
+    [
+        ({"epochs": (100, 600)}, ("column_distance",)),
+        ({"epochs": (100, 600)}, ("column_distance", "dcr_ratio")),
+        ({"epochs": (100, 300)}, ("column_distance",)),
+        ({"epochs": (100, 350)}, ("column_distance",)),
+        ({"epochs": (100, 600), "pac": (5, 10)}, ("column_distance",)),
+    ],
+)
+def test_rule_retry_always_lies_inside_the_retry_limits(tmp_path, gan_bounds, failed):
+    # The runtime validates the fallback against numeric_bounds, so this must hold.
+    request, _run, _path = _retry_request(tmp_path, gan_bounds, *failed)
+    rule_settings, _name, _reason = _rule_retry(CTGAN_DEFAULTS, request)
+    privacy = bool(set(failed) & PRIVACY_CHECKS)
+    limits = _retry_limits(CTGAN_DEFAULTS, gan_bounds, privacy)
+    assert limits is not None
+    for name, (low, high) in limits.items():
+        assert low <= rule_settings[name] <= high
+
+
+def test_llm_proposal_inside_the_limits_is_trained(tmp_path, gan):
+    fake = FakeLLM([PROPOSAL])
+    request, run, _path = _retry_request(tmp_path, {"epochs": (100, 600)}, "column_distance")
+    output = run_model_selection(request, run, client=fake)
+    assert len(fake.calls) == 1  # attempt 2: no explanation call, one proposal call
+    assert output.status is Status.SUCCESS
+    assert gan.trains[0][1]["epochs"] == 500
+    assert _logged(run, "hyperparameter_retry") == "ADJUSTED"
+
+
+def test_llm_proposal_outside_the_limits_falls_back_to_the_rule(tmp_path, gan):
+    fake = FakeLLM([{**PROPOSAL, "epochs": 900}, {**PROPOSAL, "epochs": 900}])
+    request, run, _path = _retry_request(tmp_path, {"epochs": (100, 600)}, "column_distance")
+    run_model_selection(request, run, client=fake)
+    assert len(fake.calls) == 2  # one retry on the invalid answer
+    assert gan.trains[0][1]["epochs"] == 400
+    assert _logged(run, "llm_step") == "LLM_FALLBACK"
+    assert _logged(run, "hyperparameter_retry") == "ADJUSTED"
+
+
+# --- Retry logging: one line per retry, with its source -----------------------------------------
+
+RETRY_RULES = {"hyperparameter_retry", "retry_unchanged"}
+
+
+def _retry_lines(run):
+    decisions = read_decisions(run)
+    return decisions[decisions.rule.isin(RETRY_RULES)]
+
+
+def test_an_accepted_proposal_logs_one_retry_line_from_the_llm(tmp_path, gan):
+    request, run, _path = _retry_request(tmp_path, {"epochs": (100, 600)}, "column_distance")
+    fake = FakeLLM([PROPOSAL])
+    run_model_selection(request, run, client=fake)
+    assert len(fake.calls) == 1
+    assert fake.calls[0][2] is RetrySettings
+    lines = _retry_lines(run)
+    assert len(lines) == 1
+    line = lines.iloc[0]
+    assert line.rule == "hyperparameter_retry" and line.outcome == "ADJUSTED"
+    assert line.inputs["source"] == "llm"
+    assert line.inputs["proposed"] == {k: PROPOSAL[k] for k in CTGAN_DEFAULTS}
+    assert line.inputs["applied"] == {**CTGAN_DEFAULTS, "epochs": 500}
+    assert line.inputs["previous_settings"] == CTGAN_DEFAULTS
+    assert line.inputs["limits"]["epochs"] == [100, 600]
+    assert line.inputs["privacy_failed"] is False
+    assert line.inputs["failed_checks"] == ["column_distance"]
+    assert line.rationale == PROPOSAL["reason"]
+    # The old one-setting keys are still there.
+    assert (line.inputs["previous_epochs"], line.inputs["epochs"]) == (300, 500)
+    assert line.inputs["bound"] == [100, 600]
+
+
+def test_a_fallback_logs_one_retry_line_from_the_rule(tmp_path, gan):
+    bad = {**PROPOSAL, "epochs": 900}
+    request, run, _path = _retry_request(tmp_path, {"epochs": (100, 600)}, "column_distance")
+    fake = FakeLLM([bad, bad])
+    run_model_selection(request, run, client=fake)
+    assert len(fake.calls) == 2  # both scripted answers are out of bounds
+    assert _logged(run, "llm_step") == "LLM_FALLBACK"
+    lines = _retry_lines(run)
+    assert len(lines) == 1
+    line = lines.iloc[0]
+    assert line.rule == "hyperparameter_retry" and line.outcome == "ADJUSTED"
+    assert line.inputs["source"] == "rule"
+    assert line.inputs["proposed"] is None
+    assert line.inputs["applied"] == {**CTGAN_DEFAULTS, "epochs": 400}
+    assert "epochs move from 300 to 400" in line.rationale
+
+
+def test_the_no_llm_path_also_logs_exactly_one_retry_line(tmp_path, gan):
+    fake = FakeLLM([])
+    request, run, _path = _retry_request(tmp_path, {}, "column_distance")
+    run_model_selection(request, run, client=fake)
+    assert fake.calls == []
+    lines = _retry_lines(run)
+    assert len(lines) == 1
+    line = lines.iloc[0]
+    assert line.rule == "retry_unchanged" and line.outcome == "UNCHANGED"
+    assert line.inputs["source"] == "rule"
+    assert line.inputs["limits"] is None
+    assert line.rationale == "retry has no legal adjustment"
+
+
+def test_unsupported_adjustments_are_reported_once_and_not_applied(tmp_path, gan):
+    diagnosis = QualityDiagnosis(
+        failed_checks=["column_distance"],
+        columns=["job"],
+        likely_cause="Job categories are off.",
+        adjustments=["more_epochs", "rebalance_categories"],
+    )
+    report = _fail_report("column_distance").model_copy(update={"diagnosis": diagnosis})
+    config = _config(tmp_path, gan_bounds={"epochs": (100, 600)})
+    request, run, _path = _request(
+        tmp_path, config, _bank_frame(), 500, 1500, attempt=2, previous=report,
+    )
+    fake = FakeLLM([PROPOSAL])
+    run_model_selection(request, run, client=fake)
+    assert len(fake.calls) == 1
+    decisions = read_decisions(run)
+    unsupported = decisions.query("rule == 'unsupported_adjustment'")
+    assert len(unsupported) == 1
+    assert unsupported.iloc[0].inputs["adjustment"] == "rebalance_categories"
+    assert unsupported.iloc[0].outcome == "NOT_APPLIED"
+    # It comes before the retry line, and more_epochs produced no such line.
+    assert unsupported.index[0] < _retry_lines(run).index[0]
+    assert gan.trains[0][1]["epochs"] == 500
+
+
+# --- Retry proposer: full FakeLLM contract ------------------------------------------------------
+
+ANSWER = {
+    "epochs": 400,
+    "pac": 10,
+    "discriminator_steps": 1,
+    "batch_size": 500,
+    "reason": "more training",
+}
+
+
+def _answer(**overrides):
+    return {**ANSWER, **overrides}
+
+
+def _trained(gan):
+    return gan.trains[-1][1]
+
+
+def test_fail_report_builds_hard_checks_and_can_carry_a_diagnosis():
+    assert CheckResult.model_fields["hard"].default is True
+    diagnosis = QualityDiagnosis(
+        failed_checks=["column_distance"],
+        columns=["age"],
+        likely_cause="Undertrained.",
+        adjustments=["more_epochs"],
+    )
+    report = _fail_report("column_distance", "exact_train_copies", diagnosis=diagnosis)
+    assert all(check.hard for check in report.levels[0].checks)
+    assert report.diagnosis is diagnosis
+
+
+def test_a_proposal_inside_the_bounds_is_used_and_logged_from_the_llm(tmp_path, gan):
+    fake = FakeLLM([_answer(epochs=500)])
+    request, run, _path = _retry_request(tmp_path, {"epochs": (100, 600)}, "column_distance")
+    run_model_selection(request, run, client=fake)
+    assert len(fake.calls) == 1
+    assert _trained(gan)["epochs"] == 500
+    line = _retry_lines(run).iloc[0]
+    assert len(_retry_lines(run)) == 1
+    assert line.rule == "hyperparameter_retry"
+    assert line.inputs["source"] == "llm"
+
+
+def test_a_proposal_outside_the_bounds_is_rejected(tmp_path, gan):
+    # The issue's required out-of-bounds case: the runtime rejects it, the rule's 400 is used.
+    bad = _answer(epochs=900)
+    fake = FakeLLM([bad, bad])
+    request, run, _path = _retry_request(tmp_path, {"epochs": (100, 600)}, "column_distance")
+    run_model_selection(request, run, client=fake)
+    assert len(fake.calls) == 2
+    assert _logged(run, "llm_step") == "LLM_FALLBACK"
+    assert _trained(gan)["epochs"] == 400
+    assert _retry_lines(run).iloc[0].inputs["source"] == "rule"
+
+
+def test_changing_an_unbounded_setting_is_rejected(tmp_path, gan):
+    moved_pac = _answer(pac=5)
+    fake = FakeLLM([moved_pac, moved_pac])
+    request, run, _path = _retry_request(tmp_path, {"epochs": (100, 600)}, "column_distance")
+    run_model_selection(request, run, client=fake)
+    assert len(fake.calls) == 2
+    assert _logged(run, "llm_step") == "LLM_FALLBACK"
+    assert _trained(gan)["pac"] == 10
+    assert _trained(gan)["epochs"] == 400
+    assert _retry_lines(run).iloc[0].inputs["source"] == "rule"
+
+
+def test_a_non_divisible_batch_snaps_down_when_the_multiple_is_in_range(tmp_path, gan):
+    # 500 // 8 * 8 = 496, which sits inside (480, 520).
+    fake = FakeLLM([_answer(pac=8, batch_size=500)])
+    request, run, _path = _retry_request(
+        tmp_path,
+        {"epochs": (100, 600), "pac": (5, 12), "batch_size": (480, 520)},
+        "column_distance",
+    )
+    run_model_selection(request, run, client=fake)
+    assert len(fake.calls) == 1
+    assert _trained(gan)["pac"] == 8
+    assert _trained(gan)["batch_size"] == 496
+    assert _retry_lines(run).iloc[0].inputs["source"] == "llm"
+
+
+def test_a_non_divisible_batch_snaps_up_when_the_round_down_is_below_the_bound(tmp_path, gan):
+    # 496 is below 500, so the next multiple 504 is used.
+    fake = FakeLLM([_answer(pac=8, batch_size=500)])
+    request, run, _path = _retry_request(
+        tmp_path,
+        {"epochs": (100, 600), "pac": (5, 12), "batch_size": (500, 520)},
+        "column_distance",
+    )
+    run_model_selection(request, run, client=fake)
+    assert len(fake.calls) == 1
+    assert _trained(gan)["batch_size"] == 504
+    assert _retry_lines(run).iloc[0].inputs["source"] == "llm"
+
+
+def test_an_impossible_batch_snap_is_rejected_and_logged(tmp_path, gan):
+    # 496 < 500 and 504 > 503: no legal multiple inside the batch_size range.
+    fake = FakeLLM([_answer(pac=8, batch_size=500)])
+    request, run, _path = _retry_request(
+        tmp_path,
+        {"epochs": (100, 600), "pac": (5, 12), "batch_size": (500, 503)},
+        "column_distance",
+    )
+    run_model_selection(request, run, client=fake)
+    assert len(fake.calls) == 1
+    assert _logged(run, "retry_rejected") == "REJECTED"
+    assert _trained(gan)["pac"] == 10
+    assert _trained(gan)["batch_size"] == 500
+    assert _trained(gan)["epochs"] == 400
+    assert _retry_lines(run).iloc[0].inputs["source"] == "rule"
+
+
+@pytest.mark.parametrize("check", sorted(PRIVACY_CHECKS))
+def test_a_privacy_failure_rejects_raising_epochs(tmp_path, gan, check):
+    raised = _answer(epochs=500)
+    fake = FakeLLM([raised, raised])
+    request, run, _path = _retry_request(
+        tmp_path, {"epochs": (100, 600)}, "column_distance", check,
+    )
+    run_model_selection(request, run, client=fake)
+    assert len(fake.calls) == 2
+    assert _logged(run, "llm_step") == "LLM_FALLBACK"
+    assert _trained(gan)["epochs"] == 300
+    assert _retry_lines(run).iloc[0].inputs["source"] == "rule"
+
+
+@pytest.mark.parametrize("check", ["dcr_ratio", "exact_train_copies"])
+def test_a_privacy_failure_accepts_lowering_epochs(tmp_path, gan, check):
+    fake = FakeLLM([_answer(epochs=200, reason="shorter training after copies")])
+    request, run, _path = _retry_request(
+        tmp_path, {"epochs": (100, 600)}, "column_distance", check,
+    )
+    run_model_selection(request, run, client=fake)
+    assert len(fake.calls) == 1
+    assert _trained(gan)["epochs"] == 200
+    assert _retry_lines(run).iloc[0].inputs["source"] == "llm"
+
+
+def test_empty_gan_bounds_make_no_llm_call_and_keep_the_defaults(tmp_path, gan):
+    fake = FakeLLM([])
+    request, run, _path = _retry_request(tmp_path, {}, "column_distance")
+    run_model_selection(request, run, client=fake)
+    assert len(fake.calls) == 0
+    assert {name: _trained(gan)[name] for name in CTGAN_DEFAULTS} == CTGAN_DEFAULTS
+    line = _retry_lines(run).iloc[0]
+    assert len(_retry_lines(run)) == 1
+    assert line.rule == "retry_unchanged"
+
+
+def test_attempt_1_explains_and_attempt_2_proposes(tmp_path, gan):
+    first_llm = FakeLLM([EXPLAIN_ANSWER])
+    first, run, _path = _request(
+        tmp_path, _config(tmp_path), _bank_frame(), 500, 1500, run_id="explain",
+    )
+    run_model_selection(first, run, client=first_llm)
+    assert len(first_llm.calls) == 1
+    assert first_llm.calls[0][2] is SelectionExplanation
+
+    second_llm = FakeLLM([_answer(epochs=500)])
+    second, retry_run, _path = _retry_request(
+        tmp_path, {"epochs": (100, 600)}, "column_distance",
+    )
+    run_model_selection(second, retry_run, client=second_llm)
+    assert len(second_llm.calls) == 1
+    assert second_llm.calls[0][2] is RetrySettings
+
+
+def test_change_sampling_is_the_unsupported_adjustment_that_gets_logged(tmp_path, gan):
+    diagnosis = QualityDiagnosis(
+        failed_checks=["column_distance"],
+        columns=["job"],
+        likely_cause="Job categories are off.",
+        adjustments=["more_epochs", "change_sampling"],
+    )
+    fake = FakeLLM([_answer(epochs=500)])
+    request, run, _path = _retry_request(
+        tmp_path, {"epochs": (100, 600)}, "column_distance", diagnosis=diagnosis,
+    )
+    run_model_selection(request, run, client=fake)
+    assert len(fake.calls) == 1
+    unsupported = read_decisions(run).query("rule == 'unsupported_adjustment'")
+    assert len(unsupported) == 1
+    assert unsupported.iloc[0].inputs["adjustment"] == "change_sampling"
+
+
+def test_attempt_2_writes_exactly_one_retry_line(tmp_path, gan):
+    changed, run, _path = _retry_request(
+        tmp_path, {"epochs": (100, 600)}, "column_distance", run_id="changed",
+    )
+    fake_changed = FakeLLM([_answer(epochs=500)])
+    run_model_selection(changed, run, client=fake_changed)
+    assert len(fake_changed.calls) == 1
+    lines = _retry_lines(run)
+    assert len(lines) == 1
+    assert lines.iloc[0].rule == "hyperparameter_retry"
+
+    unchanged, other, _path = _retry_request(tmp_path, {}, "column_distance", run_id="unchanged")
+    fake_idle = FakeLLM([])
+    run_model_selection(unchanged, other, client=fake_idle)
+    # Empty gan_bounds pin every setting, so the proposer is not called.
+    assert len(fake_idle.calls) == 0
+    idle = _retry_lines(other)
+    assert len(idle) == 1
+    assert idle.iloc[0].rule == "retry_unchanged"
+
+
+# --- Unchosen routes: why TimeGAN / WGAN-GP / CTGAN lost ---------------------------------------
+
+
+def test_bank_mixed_skips_timegan_and_wgan_gp_only():
+    reasons = _route_reasons(select_generator(_data()))
+    assert set(reasons) == {"timegan", "wgan_gp"}
+    assert "TimeGAN is not selected" in reasons["timegan"]
+    assert "CTGAN is selected" in reasons["wgan_gp"]
+
+
+def test_default_complete_block_skips_ctgan_and_wgan_gp():
+    reasons = _route_reasons(select_generator(_data(
+        dataset="default",
+        rows=18000,
+        minority_count=4000,
+        minority_rate=4000 / 18000,
+        columns=(
+            _column("SEX", "categorical"),
+            _column("PAY_1", "categorical"),
+            _column("BILL_AMT1", "numeric"),
+            _column("y", "numeric"),
+        ),
+        entity_in_table=True,
+        wide_steps=6,
+        repeated_observation=True,
+        time_index_ready=True,
+    )))
+    assert set(reasons) == {"ctgan", "wgan_gp"}
+    assert reasons["ctgan"] == "TimeGAN was selected; CTGAN is its documented fallback"
+    assert reasons["wgan_gp"] == "TimeGAN was selected, so type routing did not run"
+
+
+def test_polish_all_numeric_skips_timegan_and_ctgan_from_type_routing():
+    reasons = _route_reasons(select_generator(_data(
+        dataset="polish",
+        rows=6000,
+        target="bankrupt",
+        minority_count=800,
+        minority_rate=800 / 6000,
+        columns=(
+            _column("A1", "numeric"),
+            _column("A2", "numeric"),
+            _column("bankrupt", "numeric"),
+        ),
+    )))
+    assert set(reasons) == {"timegan", "ctgan"}
+    assert "TimeGAN is not selected" in reasons["timegan"]
+    assert "WGAN-GP is selected" in reasons["ctgan"]
+    assert "CTGAN" in reasons["ctgan"]
+
+
+def test_too_few_rows_skips_every_route_at_the_size_gate():
+    reasons = _route_reasons(select_generator(
+        _data(rows=1500, minority_count=200, minority_rate=200 / 1500)
+    ))
+    assert set(reasons) == {"timegan", "wgan_gp", "ctgan"}
+    prefix = "Not evaluated: size_gate stopped selection."
+    assert all(reason.startswith(prefix) for reason in reasons.values())
+    assert "below min_rows" in next(iter(reasons.values()))
+
+
+def test_non_tabular_skips_every_route_at_dcgan_excluded():
+    reasons = _route_reasons(select_generator(_data(tabular=False)))
+    assert set(reasons) == {"timegan", "wgan_gp", "ctgan"}
+    assert all(
+        reason.startswith("Not evaluated: dcgan_excluded stopped selection.")
+        for reason in reasons.values()
+    )
+
+
+def test_route_skipped_is_logged_once_per_unchosen_route_on_attempt_1_only(tmp_path, gan):
+    first, run, _path = _request(tmp_path, _config(tmp_path), _bank_frame(), 500, 1500)
+    run_model_selection(first, run)
+    first_routes = read_decisions(run).query("rule == 'route_skipped'")
+    assert sorted(first_routes.inputs.map(lambda item: item["route"])) == ["timegan", "wgan_gp"]
+    assert set(first_routes.outcome) == {"NOT_SELECTED"}
+    assert (first_routes.inputs.map(lambda item: item["attempt"]) == 1).all()
+
+    second, same, _path = _request(
+        tmp_path, _config(tmp_path), _bank_frame(), 500, 1500, attempt=2,
+        previous=_fail_report("column_distance"), run_id="second",
+    )
+    run_model_selection(second, same)
+    second_routes = read_decisions(same).query("rule == 'route_skipped'")
+    assert second_routes.empty
+
+
+# --- Rule lock, grounding, precedence, live -----------------------------------------------------
+
+STOP_GATES = ("size_gate", "horizon_gate", "missing_gate", "leakage_gate")
+LIVE_BOUNDS = {
+    "epochs": (100, 600),
+    "pac": (5, 10),
+    "discriminator_steps": (1, 3),
+    "batch_size": (100, 1000),
+}
+
+
+class _ConfigEditingLLM:
+    """Rewrites a locked config field before answering, the way the quality-agent test does."""
+
+    def __init__(self, run, answer):
+        self.run = run
+        self.answer = answer
+
+    def complete(self, system_prompt, context, output_model):
+        text = self.run.config_path.read_text()
+        self.run.config_path.write_text(text.replace("min_rows: 2000", "min_rows: 2500"))
+        return self.answer
+
+
+def test_changing_min_rows_during_the_explain_call_is_rejected(tmp_path, gan):
+    request, run, _path = _request(tmp_path, _config(tmp_path), _bank_frame(), 500, 1500)
+    with pytest.raises(RuleOverrideError):
+        run_model_selection(request, run, client=_ConfigEditingLLM(run, EXPLAIN_ANSWER))
+    assert "RULE_OVERRIDE_REJECTED" in read_decisions(run).outcome.tolist()
+    assert gan.trains == []
+
+
+def test_changing_min_rows_during_the_proposer_call_is_rejected(tmp_path, gan):
+    request, run, _path = _retry_request(tmp_path, {"epochs": (100, 600)}, "column_distance")
+    with pytest.raises(RuleOverrideError):
+        run_model_selection(request, run, client=_ConfigEditingLLM(run, _answer(epochs=500)))
+    assert "RULE_OVERRIDE_REJECTED" in read_decisions(run).outcome.tolist()
+    assert gan.trains == []
+
+
+def test_the_proposer_context_is_grounded_in_the_diagnosis_and_has_no_rows(tmp_path, gan):
+    diagnosis = QualityDiagnosis(**V1_ANSWER)
+    fake = FakeLLM([_answer(epochs=500)])
+    request, run, _path = _retry_request(
+        tmp_path,
+        {"epochs": (100, 600)},
+        "mean_column_distance",
+        "worst_column_distance",
+        "real_vs_synthetic_auc",
+        diagnosis=diagnosis,
+    )
+    run_model_selection(request, run, client=fake)
+    assert len(fake.calls) == 1
+    _prompt, context, model = fake.calls[0]
+    assert model is RetrySettings
+    assert "source_row" not in context
+    for name in V1_DRIVERS:
+        assert name in context
+    for name in V1_ANSWER["failed_checks"]:
+        assert name in context
+    assert "AUC 0.86" in context
+    payload = json.loads(context)
+    assert set(payload) == {
+        "attempt",
+        "dataset",
+        "failed_hard_checks",
+        "diagnosis",
+        "current_settings",
+        "limits",
+        "privacy_failed",
+    }
+    failed_names = [item["name"] for item in payload["failed_hard_checks"]]
+    assert failed_names == [
+        "mean_column_distance",
+        "worst_column_distance",
+        "real_vs_synthetic_auc",
+    ]
+    assert payload["diagnosis"]["likely_cause"] == V1_ANSWER["likely_cause"]
+    assert set(payload["diagnosis"]["columns"]) == set(V1_DRIVERS)
+
+
+def _multi_fail(**overrides):
+    fields = {
+        "rows": 100,
+        "minority_count": 10,
+        "minority_rate": 0.1,
+        "columns": (_column("age", "numeric", missing=5), _column("y", "numeric")),
+        "leaky_columns": ("duration",),
+        "horizons_pooled": True,
+    }
+    fields.update(overrides)
+    return _data(**fields)
+
+
+def test_several_failing_gates_stop_at_size_and_do_not_override_each_other():
+    result = select_generator(_multi_fail())
+    assert result.status == "skipped"
+    names = [step.rule for step in result.steps]
+    assert names == list(STEP_ORDER)
+    by_rule = dict(zip(names, result.steps, strict=True))
+    assert by_rule["size_gate"].outcome == "FAIL"
+    later = STEP_ORDER[STEP_ORDER.index("size_gate") + 1 :]
+    assert all(by_rule[name].outcome == "NOT_REACHED" for name in later)
+    for name in STOP_GATES:
+        assert names.count(name) == 1
+
+
+@pytest.mark.parametrize("cleared", range(len(STOP_GATES)))
+def test_clearing_earlier_gates_lets_the_next_one_stop_selection(cleared):
+    overrides = {}
+    if cleared >= 1:
+        overrides.update(rows=27126, minority_count=3173, minority_rate=3173 / 27126)
+    if cleared >= 2:
+        overrides["horizons_pooled"] = False
+    if cleared >= 3:
+        overrides["columns"] = (_column("age", "numeric"), _column("y", "numeric"))
+    expected = STOP_GATES[cleared]
+    result = select_generator(_multi_fail(**overrides))
+    names = [step.rule for step in result.steps]
+    by_rule = dict(zip(names, result.steps, strict=True))
+    assert result.status == "skipped"
+    assert by_rule[expected].outcome == "FAIL"
+    assert [name for name in STOP_GATES if by_rule[name].outcome == "FAIL"] == [expected]
+    later = STEP_ORDER[STEP_ORDER.index(expected) + 1 :]
+    assert all(by_rule[name].outcome == "NOT_REACHED" for name in later)
+    for name in STOP_GATES:
+        assert names.count(name) == 1
+
+
+@pytest.mark.live
+@pytest.mark.skipif(not os.environ.get("RUN_LIVE_LLM"), reason="set RUN_LIVE_LLM=1 to call Vertex")
+def test_live_gemini_explains_the_rule_and_proposes_a_legal_retry(tmp_path, gan):
+    """One real Vertex call per step; run with RUN_LIVE_LLM=1 and -m live."""
+    first, run, _path = _request(
+        tmp_path, _config(tmp_path), _bank_frame(), 500, 1500, run_id="live-explain",
+    )
+    explained = run_model_selection(first, run)
+    explain_step = read_decisions(run).query("rule == 'llm_step'").outcome.iloc[0]
+    assert explain_step != "LLM_FALLBACK", "the Vertex explain call failed; see decisions.jsonl"
+    assert explained.generator == "ctgan"
+    assert explain_step["generator"] == "ctgan"
+
+    second, retry_run, _path = _retry_request(
+        tmp_path, LIVE_BOUNDS, "column_distance", run_id="live-retry",
+    )
+    retried = run_model_selection(second, retry_run)
+    retry_step = read_decisions(retry_run).query("rule == 'llm_step'").outcome.iloc[-1]
+    assert retry_step != "LLM_FALLBACK", "the Vertex proposer call failed; see decisions.jsonl"
+    settings = {name: retried.hyperparameters[name] for name in SETTING_NAMES}
+    for name, (low, high) in LIVE_BOUNDS.items():
+        assert low <= settings[name] <= high
+    assert settings["batch_size"] % settings["pac"] == 0
+    assert retried.generator == "ctgan"
+
+
+def test_model_selection_in_the_graph_uses_the_fake_explanation(tmp_path, gan):
+    frame = _bank_frame()
+    positives, negatives = 500, 1500
+
+    def preprocess(request, run):
+        data = run.subdir("data")
+        train_path = data / "baseline_train.csv"
+        frame.to_csv(train_path, index=False)
+        unread = data / "unread.csv"
+        unread.write_text("not-a-training-table\n")
+        files = ArmFiles(
+            train_path=train_path.resolve(),
+            val_path=unread.resolve(),
+            test_path=unread.resolve(),
+        )
+        dummy = run.subdir("profile") / "dummy.json"
+        dummy.write_text("{}\n")
+        return PreprocessOutput(
+            status=Status.SUCCESS,
+            raw=files,
+            baseline=files,
+            profile_path=dummy.resolve(),
+            treatment_log_path=dummy.resolve(),
+            transformer_path=dummy.resolve(),
+            transformer_fit_rows=len(frame),
+            baseline_train_positives=positives,
+            baseline_train_negatives=negatives,
+        )
+
+    fake = FakeLLM([EXPLAIN_ANSWER])
+    agents = default_agents()
+    agents[Stage.PREPROCESSING] = preprocess
+    agents[Stage.MODEL_SELECTION] = partial(run_model_selection, client=fake)
+    state, run = graph_module.run_pipeline(
+        _config(tmp_path), runs_dir=tmp_path / "runs", agents=agents
+    )
+    assert state.is_complete
+    assert state.attempts(Stage.MODEL_SELECTION) == 1
+    assert len(fake.calls) == 1
+    assert fake.calls[0][2] is SelectionExplanation
+    steps = read_decisions(run).query("rule == 'llm_step' and agent == 'model_selection'")
+    assert steps.outcome.iloc[0] == EXPLAIN_ANSWER
+    assert gan.trains
