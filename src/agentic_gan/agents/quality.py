@@ -14,7 +14,7 @@ import pandas as pd
 from matplotlib.figure import Figure
 
 from agentic_gan.llm import LLMStepOptions, run_llm_step
-from agentic_gan.orchestrator.decisions import log_decision
+from agentic_gan.orchestrator.decisions import log_decision, log_progress
 from agentic_gan.orchestrator.manifest import RunDir
 from agentic_gan.schemas import (
     Adjustment,
@@ -219,6 +219,12 @@ def run_quality(request: QualityInput, run: RunDir, *, client=None) -> QualityRe
     decisions = []
 
     for synthetic_set in request.generator.synthetic_sets:
+        log_progress(
+            "quality_check",
+            f"score fill={synthetic_set.fill_level:g} attempt={attempt}",
+            tool="fidelity_checks + quality_privacy_checks",
+            next_action="save quality plot and check verdict",
+        )
         synthetic = pd.read_csv(synthetic_set.path)
         if len(synthetic) != synthetic_set.rows:
             raise ValueError(

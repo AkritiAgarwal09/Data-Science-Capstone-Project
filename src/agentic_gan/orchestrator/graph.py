@@ -36,7 +36,7 @@ from agentic_gan.tools.quality_fidelity import RULES
 from agentic_gan.utils.datasets import DATASETS, load_configs
 from agentic_gan.utils.files import sha256_file, write_text_atomic
 
-from .decisions import log_decision
+from .decisions import log_decision, log_progress
 from .manifest import Manifest, RunDir, create_run
 from .narrative import write_narrative
 from .split import split_for_training
@@ -132,6 +132,13 @@ def build_graph(agents=None, *, llm=None):
         for retry in range(2):
             run_state = run_state.start(stage)
             run_state.save(run.state_path)
+            agent = agents[stage]
+            log_progress(
+                stage.value,
+                f"attempt={run_state.attempts(stage)} started",
+                tool=getattr(agent, "__name__", type(agent).__name__),
+                next_action="validate output and register artifacts",
+            )
             try:
                 check_lock()
                 result = STAGE_IO[stage][1].model_validate(agents[stage](request, run))
@@ -142,7 +149,8 @@ def build_graph(agents=None, *, llm=None):
                     next_manifest = manifest.register(run, stage, result)
                     next_manifest.save(run)
                     run_state = run_state.finish(stage, Status.SKIPPED, result.reason)
-                    run_state = run_state.skip(Stage.QUALITY_CHECK, result.reason)
+                    if run_state.status(Stage.QUALITY_CHECK) is None:
+                        run_state = run_state.skip(Stage.QUALITY_CHECK, result.reason)
                     run_state = run_state.with_gan(False, result.reason)
                     run_state.save(run.state_path)
                     log_decision(
@@ -290,6 +298,7 @@ def build_graph(agents=None, *, llm=None):
         )
 
     def partial_report(state):
+        log_progress("orchestrator", "writing partial report", next_action="summarize decision log")
         run_state = state["run_state"]
         failed = run_state.failed_stage
         report = state["run"].subdir("report") / "partial_report.md"
@@ -309,6 +318,7 @@ def build_graph(agents=None, *, llm=None):
         return {}
 
     def final_narrative(state):
+        log_progress("orchestrator", "writing run summary", next_action="summarize decision log")
         write_narrative(
             state["run"],
             state["run_state"],
@@ -319,23 +329,34 @@ def build_graph(agents=None, *, llm=None):
         return {}
 
     def route(next_stage):
-        return lambda state: "partial_report" if state["run_state"].failed_stage else next_stage
+        def choose(state):
+            chosen = "partial_report" if state["run_state"].failed_stage else next_stage
+            log_progress("orchestrator", "route", next_action=chosen)
+            return chosen
+
+        return choose
 
     def after_model_selection(state):
         if state["run_state"].failed_stage:
-            return "partial_report"
-        if state["run_state"].status(Stage.MODEL_SELECTION) is Status.SKIPPED:
-            return "training"
-        return "quality_check"
+            chosen = "partial_report"
+        elif state["run_state"].status(Stage.MODEL_SELECTION) is Status.SKIPPED:
+            chosen = "training"
+        else:
+            chosen = "quality_check"
+        log_progress("orchestrator", "route", next_action=chosen)
+        return chosen
 
     def after_quality(state):
         if state["run_state"].failed_stage:
-            return "partial_report"
-        if state["quality_check"].verdict is Verdict.PASS:
-            return "training"
-        if state["selection_attempt"] < min(state["config"].max_attempts, 3):
-            return "model_selection"
-        return "training"
+            chosen = "partial_report"
+        elif state["quality_check"].verdict is Verdict.PASS:
+            chosen = "training"
+        elif state["selection_attempt"] < min(state["config"].max_attempts, 3):
+            chosen = "model_selection"
+        else:
+            chosen = "training"
+        log_progress("orchestrator", "route", next_action=chosen)
+        return chosen
 
     graph = StateGraph(PipelineState)
     for name, node in (
@@ -376,6 +397,7 @@ def run_pipeline(config: RunConfig, *, runs_dir: Path = Path("runs"), agents=Non
     """Run the compiled graph and return (RunState, RunDir)."""
     graph = build_graph(agents, llm=llm)
     run = create_run(config, run_id=f"{config.dataset_name}_{uuid4().hex[:12]}", runs_dir=runs_dir)
+    log_progress("orchestrator", f"run={run.root}", next_action="split")
     locked = rule_hash(config)
     log_decision(
         "orchestrator",
@@ -395,5 +417,11 @@ def run_pipeline(config: RunConfig, *, runs_dir: Path = Path("runs"), agents=Non
             "rule_hash": locked,
             "locked_config_yaml": config.to_yaml(),
         }
+    )
+    failed = result["run_state"].failed_stage
+    log_progress(
+        "orchestrator",
+        "run failed" if failed else "run completed",
+        next_action="review partial report" if failed else "review report",
     )
     return result["run_state"], run

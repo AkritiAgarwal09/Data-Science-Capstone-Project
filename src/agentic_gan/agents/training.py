@@ -22,7 +22,7 @@ from sklearn.model_selection import RepeatedStratifiedKFold
 from threadpoolctl import threadpool_limits
 
 from agentic_gan.llm import LLMStepOptions, run_llm_step
-from agentic_gan.orchestrator.decisions import log_decision
+from agentic_gan.orchestrator.decisions import log_decision, log_progress
 from agentic_gan.orchestrator.manifest import RunDir
 from agentic_gan.schemas import (
     Arm,
@@ -1049,6 +1049,12 @@ def run_training(
             for arm, level, tables, extra, error in _arm_sets(
                 config, raw, cleaned, training_plan.smote_levels, accepted, seed
             ):
+                log_progress(
+                    "training",
+                    f"fit arm={arm.value} fill={level} seed={seed}",
+                    tool="baselines.build_models + _fit_record",
+                    next_action="select on validation and save metrics",
+                )
                 group = [
                     _fit_record(
                         arm,

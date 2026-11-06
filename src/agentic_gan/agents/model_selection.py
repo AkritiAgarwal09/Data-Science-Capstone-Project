@@ -6,7 +6,7 @@ from collections.abc import Sequence
 
 import pandas as pd
 
-from agentic_gan.orchestrator.decisions import log_decision
+from agentic_gan.orchestrator.decisions import log_decision, log_progress
 from agentic_gan.orchestrator.manifest import RunDir
 from agentic_gan.schemas import (
     GeneratorOutput,
@@ -326,6 +326,12 @@ def _train_ctgan(
         {"attempt": attempt, **settings, "seed": request.config.split_seed, "generator": "ctgan"},
         "SET", "CTGAN settings are inside gan_bounds.", run=run,
     )
+    log_progress(
+        "model_selection",
+        f"train CTGAN attempt={attempt} epochs={settings['epochs']} rows={len(train)}",
+        tool="train_ctgan",
+        next_action="save checkpoint and sample fill levels",
+    )
     model = train_ctgan(
         train,
         target,
@@ -340,6 +346,12 @@ def _train_ctgan(
     negatives = request.preprocess.baseline_train_negatives
     for level in request.config.fill_levels:
         count = fill_rows(level, positives, negatives)
+        log_progress(
+            "model_selection",
+            f"sample fill={level:g} rows={count}",
+            tool="sample_synthetic",
+            next_action="write synthetic CSV",
+        )
         sample = sample_synthetic(
             model,
             count,

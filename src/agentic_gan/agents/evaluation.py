@@ -9,7 +9,7 @@ import pandas as pd
 from pydantic import Field, model_validator
 
 from agentic_gan.llm import LLMStepOptions, run_llm_step
-from agentic_gan.orchestrator.decisions import log_decision
+from agentic_gan.orchestrator.decisions import log_decision, log_progress
 from agentic_gan.orchestrator.manifest import RunDir
 from agentic_gan.orchestrator.state import RunState
 from agentic_gan.schemas import Arm, EvaluationInput, EvaluationOutput, Schema, Status
@@ -325,6 +325,12 @@ def run_evaluation(request: EvaluationInput, run: RunDir, *, client=None) -> Eva
     """Evaluate artifacts and publish only a number-verified narrative."""
     state = RunState.load(run.root / request.state_path)
     folder = run.subdir("report")
+    log_progress(
+        "evaluation",
+        "build comparison and segment evidence",
+        tool="_records + _comparisons + _segments_and_counts",
+        next_action="verify report numbers",
+    )
     metrics = _records(request, state)
     comparison, verdicts = _comparisons(metrics)
     segments, counts = _segments_and_counts(request, run, state)

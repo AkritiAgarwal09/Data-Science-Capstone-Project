@@ -10,7 +10,7 @@ import pandas as pd
 from pydantic import Field
 
 from agentic_gan.llm import LLMStepOptions, run_llm_step
-from agentic_gan.orchestrator.decisions import log_decision
+from agentic_gan.orchestrator.decisions import log_decision, log_progress
 from agentic_gan.schemas import ArmFiles, PreprocessOutput, Schema, Status, TreatmentPlan
 from agentic_gan.tools.preprocessing import (
     Preprocessor,
@@ -170,6 +170,12 @@ def preprocess(request, run, *, client=None):
         )
     # Deduplicate whole raw training rows before excluding features; keep holdouts intact.
     fitting = train.drop_duplicates(subset=[c for c in train if c != "source_row"])
+    log_progress(
+        "preprocessing",
+        f"fit repairs on {len(fitting)} training rows",
+        tool="TreatmentPreprocessor.fit",
+        next_action="write raw and cleaned splits",
+    )
     processor = TreatmentPreprocessor(config, choices, sorted(excluded)).fit(fitting)
     for row in rows:
         column = row["column"]
