@@ -111,8 +111,14 @@ registration:
   volume rule; this agent does not choose a volume.
 - `training_protocol.json`: the exact frozen reference.
 
-The selected model per arm/fill/seed maximizes real validation PR-AUC; ties retain
-suite order. Test predictions and metrics are saved for **all** fitted models as
+The selected model per arm/fill/seed maximizes real validation PR-AUC among fits
+with nonconstant validation probabilities; ties retain suite order. A constant
+predictor cannot rank rows, but trapezoidal PR-AUC can still give it a high area
+because of endpoint interpolation. Its fit, scores and predictions are retained
+with `selected=False`, a warning, and an audit decision. `metrics.csv` records
+`validation_probability_range` and `selection_eligible`. If every successful fit
+is constant, no model is selected for that group. Eligibility uses validation only;
+the frozen PR-AUC definition, estimator settings and thresholds are unchanged. Test predictions and metrics are saved for **all** fitted models as
 requested by the agent contract, unlike the winner-only baseline CLI. Test metrics
 are descriptive and never choose models, thresholds, fill levels, or seeds.
 
@@ -156,6 +162,89 @@ Tests in `tests/test_training_agent.py` cover all arm/level/seed combinations,
 frozen thresholds, serialization and manifest registration, provenance rejection,
 failure propagation, deterministic reruns, fold-local generation, a real four-model
 smoke run, and the orchestrator's filtering of quality-rejected fill levels.
+
+## Running every arm on every dataset
+
+`tools/training_grid.py` builds a run folder and a `TrainingRequest` from the files that
+already exist (the raw source, the cleaned splits in `data/interim/<dataset>/`, and optionally
+CTGAN files), calls `run_training`, and updates two tables in `results/`. It stops with an
+error if any saved validation or test prediction file contains a synthetic row.
+
+```bash
+uv run python -m agentic_gan.tools.training_grid --dataset default \
+    --ctgan-prefix data/interim/default/synthetic/default_ctgan_v2_fill
+uv run python -m agentic_gan.tools.training_grid --dataset ieee_cis --seeds 42 \
+    --ctgan-prefix data/interim/ieee_cis/synthetic/ieee_ctgan_v1_fill
+```
+
+`--ctgan-prefix` plus the fill level as a whole percent plus `.csv` names each CTGAN file
+(`..._fill10.csv`, `_fill25`, `_fill50`). Without it the CTGAN arm is not run. Each run
+replaces its own dataset's rows, so a dataset can be rerun without touching the others (extra
+seeds cannot be added later; run them together with `--seeds`). Use `--no-save` to leave
+`results/` alone. IEEE-CIS needs its local files in `data/external/` (not in git) and the cleaned
+tables from `uv run python -m agentic_gan.tools.preprocessing --dataset ieee_cis`.
+
+Outputs: `results/training_all_arms.csv` (the `metrics.csv` rows of every run) and
+`results/training_run_times.csv`. Run times are on a laptop CPU and include fitting every model
+for every arm.
+
+| Dataset | Seeds | Model fits | Run time |
+|---|---|---|---|
+| Bank Marketing | 5 | 160 | 157 s |
+| Default | 5 | 160 | 117 s |
+| Polish | 5 | 160 | 238 s |
+| IEEE-CIS | 1 | 32 | 1,694 s (28 min) |
+
+Coverage: every arm ran on every dataset, with no failed fits, and no synthetic row reached a
+validation or test prediction file (the runner stops if one does).
+
+| Dataset | original | cleaned | SMOTENC | CTGAN files |
+|---|---|---|---|---|
+| Bank Marketing | run | run | run | v2 (#54) |
+| Default | run | run | run | v2 (#55) |
+| Polish | run | run | run | v2, pooled cohorts (#55) |
+| IEEE-CIS | run | run | run | v1, trained on the fraud rows only (#90) |
+
+Test PR-AUC of each seed's validation winner, mean over the seeds (the models and thresholds
+are the frozen ones, so these differ from the #35 comparison, which used a fixed cutoff of
+0.5 and its own provisional models):
+
+| Dataset | original | cleaned | SMOTENC 10 / 25 / 50% | CTGAN 10 / 25 / 50% |
+|---|---|---|---|---|
+| Bank Marketing | 0.464 | 0.478 | 0.459 / 0.449 / 0.438 | 0.476 / 0.466 / 0.448 |
+| Default | 0.558 | 0.564 | 0.560 / 0.558 / 0.552 | 0.555 / 0.549 / 0.535 |
+| Polish | 0.835 | 0.835 | 0.815 / 0.809 / 0.793 | 0.828 / 0.820 / 0.807 |
+| IEEE-CIS (1 seed) | 0.453 | 0.409 | 0.414 / 0.412 / 0.400 | 0.425 / 0.435 / 0.410 |
+
+On Bank, Default and Polish, adding synthetic rows does not beat the cleaned arm they are added
+to, and more rows lower PR-AUC. CTGAN loses less than SMOTENC on Bank and Polish; SMOTENC is
+slightly better on Default. On Polish the original and cleaned arms give identical results,
+because the cleaning changes nothing there. On IEEE-CIS the cleaned arm is itself below the
+original (0.409 against 0.453); the synthetic arms recover part of that gap (CTGAN up to 0.435)
+without passing the original.
+
+**Caveats**
+
+- **IEEE-CIS has one seed (42), not five**, so it has no seed spread and is not comparable to the
+  other rows in that way. Five seeds would be about 160 fits and about 2.5 hours (28 minutes per
+  seed, mostly fitting the models and building the SMOTENC pool).
+- **IEEE-CIS CTGAN files are untuned.** They are the v1 settings trained on the 3,383 fraud rows
+  (`docs/notes/ieee_compute.md`) and have only had a first look, not the quality gate.
+- **Polish uses the pooled CTGAN files.** The training agent's fill counts come from the pooled
+  training table, so the single-horizon `3year` files (561 / 1,402 / 2,803 rows) do not fit.
+  `docs/notes/ctgan_default_polish_rules.md` says pooling the horizons breaks rule PB-1.
+- **Polish CTGAN has no seed spread** (SD 0.000): the CTGAN pool is fixed and the same model
+  wins every seed.
+- **The stacking ensemble** scores near zero on IEEE-CIS (it predicts almost every row as fraud)
+  and never wins; the selection rule excludes constant-probability fits.
+
+**IEEE-CIS exposed one bug, now fixed.** The cleaned, SMOTENC and CTGAN arms failed with
+`Reserved categorical bucket appears in source column card1`: the encoder is fit on the cleaned
+table, which already holds IEEE-CIS's `__missing__` and `__other__` buckets, and
+`Preprocessor` rejected them. `Preprocessor(..., from_cleaned=True)` now accepts them (leaving
+them out of the category counts), `ArmEncoder` uses it, and the encoder is identical to the one
+the preprocessing run builds. The guard against those values in raw data is unchanged
+(`tests/test_ieee_preprocessing.py`).
 
 ## LLM run plan and summary
 

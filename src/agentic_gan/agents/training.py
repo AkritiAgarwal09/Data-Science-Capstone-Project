@@ -387,8 +387,9 @@ class ArmEncoder(TransformerMixin, BaseEstimator):
             ).fit(data)
         else:
             data[self.config.target] = np.asarray(y)[real]
+            # These are cleaned tables, so IEEE-CIS rows already hold its reserved buckets.
             self.encoder_ = Preprocessor(
-                self.config, self.config.imputation, self.config.include_duration
+                self.config, self.config.imputation, self.config.include_duration, from_cleaned=True
             ).fit(data)
         return self
 
@@ -743,14 +744,19 @@ def _fit_record(
         )
         for part, data in predictions.items():
             data.to_csv(paths[part], index=False)
+        score_range = float(np.ptp(predictions["validation"]["probability"].to_numpy()))
+        notices = {str(w.message) for w in caught}
+        if score_range == 0:
+            notices.add("Constant validation probabilities; excluded from model selection")
         return ModelRecord(
             status=Status.SUCCESS,
+            validation_probability_range=score_range,
             model_path=model_path,
             val_predictions_path=paths["validation"],
             test_predictions_path=paths["test"],
             val_metrics=metrics["validation"],
             test_metrics=metrics["test"],
-            warnings=sorted({str(w.message) for w in caught}),
+            warnings=sorted(notices),
             **fields,
         )
     except Exception as exc:
@@ -760,6 +766,19 @@ def _fit_record(
             warnings=sorted({str(w.message) for w in caught}),
             **fields,
         )
+
+
+def _select_group(records):
+    """Exclude non-ranking predictors without changing frozen metric definitions.
+
+    Trapezoidal PR-AUC can reward constant probabilities through its endpoint
+    interpolation. Selection eligibility uses only validation score variation.
+    """
+    eligible = [
+        r for r in records if r.status is Status.SUCCESS and r.validation_probability_range != 0
+    ]
+    winner = max(eligible, key=lambda r: r.val_metrics["pr_auc"]) if eligible else None
+    return [r.updated(selected=winner is not None and r.model == winner.model) for r in records]
 
 
 def _save_metrics(records, dataset, folder):
@@ -777,6 +796,9 @@ def _save_metrics(records, dataset, folder):
                     "status": record.status.value,
                     "reason": record.reason,
                     "selected": record.selected,
+                    "validation_probability_range": record.validation_probability_range,
+                    "selection_eligible": record.status is Status.SUCCESS
+                    and record.validation_probability_range != 0,
                     "training_rows": record.training_rows,
                     "n_synthetic": record.synthetic_rows,
                     "protocol_id": record.protocol_id,
@@ -1046,10 +1068,17 @@ def run_training(
                     )
                     for name, estimator in baselines.build_models(seed).items()
                 ]
-                successful = [r for r in group if r.status is Status.SUCCESS]
-                if successful:
-                    winner = max(successful, key=lambda r: r.val_metrics["pr_auc"])
-                    group = [r.updated(selected=r.model == winner.model) for r in group]
+                group = _select_group(group)
+                excluded = [r.model for r in group if r.validation_probability_range == 0]
+                if excluded:
+                    log_decision(
+                        "training",
+                        "constant_validation_scores",
+                        {"arm": arm.value, "fill_level": level, "seed": seed, "models": excluded},
+                        "EXCLUDED_FROM_SELECTION",
+                        "Retained fits and metrics; constant validation scores cannot rank rows",
+                        run=run,
+                    )
                 records.extend(group)
                 log_decision(
                     "training",
@@ -1090,6 +1119,9 @@ def run_training(
     if cv_result is not None:
         failures += int(cv_result.status.eq(Status.FAILED.value).sum())
     notices = []
+    constant = sum(r.validation_probability_range == 0 for r in records)
+    if constant:
+        notices.append(f"{constant} fits had constant validation scores and were not selectable")
     if cv_folds and training_plan.gan_levels and cv_gan_factory is None:
         notices.append("CTGAN repeated CV skipped: no fold-fitted, quality-checked cv_gan_factory")
     write_run_summary(

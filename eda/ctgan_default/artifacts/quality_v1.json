@@ -1,0 +1,857 @@
+{
+  "dataset": "default",
+  "thresholds_source": "suggested",
+  "thresholds": {
+    "mean_column_distance": 0.065,
+    "worst_column_distance": 0.085,
+    "spearman_diff": 0.055,
+    "cramers_v_diff": 0.05,
+    "label_balance": 0.01,
+    "schema_match": 0.0
+  },
+  "suggested_thresholds": {
+    "mean_column_distance": 0.065,
+    "worst_column_distance": 0.085,
+    "spearman_diff": 0.055,
+    "cramers_v_diff": 0.05,
+    "label_balance": 0.01,
+    "schema_match": 0.0
+  },
+  "real_vs_real": [
+    {
+      "name": "mean_column_distance",
+      "value": 0.030090495529742967,
+      "threshold": 0.065,
+      "passed": true,
+      "hard": true
+    },
+    {
+      "name": "worst_column_distance",
+      "value": 0.041792815219353685,
+      "threshold": 0.085,
+      "passed": true,
+      "hard": true
+    },
+    {
+      "name": "spearman_diff",
+      "value": 0.025179859833402762,
+      "threshold": 0.055,
+      "passed": true,
+      "hard": true
+    },
+    {
+      "name": "cramers_v_diff",
+      "value": 0.024733577859862216,
+      "threshold": 0.05,
+      "passed": true,
+      "hard": true
+    },
+    {
+      "name": "label_balance",
+      "value": 0.0,
+      "threshold": 0.01,
+      "passed": true,
+      "hard": true
+    },
+    {
+      "name": "schema_match",
+      "value": 0.0,
+      "threshold": 0.0,
+      "passed": true,
+      "hard": true
+    },
+    {
+      "name": "column_distance:LIMIT_BAL",
+      "value": 0.016865646729044892,
+      "threshold": 0.085,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:SEX",
+      "value": 0.027269472233187986,
+      "threshold": 0.085,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:EDUCATION",
+      "value": 0.016373227375488138,
+      "threshold": 0.085,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:MARRIAGE",
+      "value": 0.005646736614690739,
+      "threshold": 0.085,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:AGE",
+      "value": 0.017193232394305036,
+      "threshold": 0.085,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:PAY_1",
+      "value": 0.03705654344323387,
+      "threshold": 0.085,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:PAY_2",
+      "value": 0.026245648750197255,
+      "threshold": 0.085,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:PAY_3",
+      "value": 0.03774085873241952,
+      "threshold": 0.085,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:PAY_4",
+      "value": 0.03143213791375433,
+      "threshold": 0.085,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:PAY_5",
+      "value": 0.03884227327419508,
+      "threshold": 0.085,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:PAY_6",
+      "value": 0.0316872421753202,
+      "threshold": 0.085,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:BILL_AMT1",
+      "value": 0.03851828329214696,
+      "threshold": 0.085,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:BILL_AMT2",
+      "value": 0.038005803811197114,
+      "threshold": 0.085,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:BILL_AMT3",
+      "value": 0.03523088260397106,
+      "threshold": 0.085,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:BILL_AMT4",
+      "value": 0.03447673536187901,
+      "threshold": 0.085,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:BILL_AMT5",
+      "value": 0.03699314587081198,
+      "threshold": 0.085,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:BILL_AMT6",
+      "value": 0.041012173469383906,
+      "threshold": 0.085,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:PAY_AMT1",
+      "value": 0.02796854874819127,
+      "threshold": 0.085,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:PAY_AMT2",
+      "value": 0.01805241143548375,
+      "threshold": 0.085,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:PAY_AMT3",
+      "value": 0.03358368119991351,
+      "threshold": 0.085,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:PAY_AMT4",
+      "value": 0.041792815219353685,
+      "threshold": 0.085,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:PAY_AMT5",
+      "value": 0.03280493191479217,
+      "threshold": 0.085,
+      "passed": true,
+      "hard": false
+    },
+    {
+      "name": "column_distance:PAY_AMT6",
+      "value": 0.02728896462112662,
+      "threshold": 0.085,
+      "passed": true,
+      "hard": false
+    }
+  ],
+  "files": {
+    "default_ctgan_fill10": {
+      "passed": false,
+      "worst_column": "SEX",
+      "n_rows": 1004,
+      "checks": [
+        {
+          "name": "mean_column_distance",
+          "value": 0.15743803116101093,
+          "threshold": 0.065,
+          "passed": false,
+          "hard": true
+        },
+        {
+          "name": "worst_column_distance",
+          "value": 0.37152194836925523,
+          "threshold": 0.085,
+          "passed": false,
+          "hard": true
+        },
+        {
+          "name": "spearman_diff",
+          "value": 0.10425775534278138,
+          "threshold": 0.055,
+          "passed": false,
+          "hard": true
+        },
+        {
+          "name": "cramers_v_diff",
+          "value": 0.1474637118789347,
+          "threshold": 0.05,
+          "passed": false,
+          "hard": true
+        },
+        {
+          "name": "label_balance",
+          "value": 0.0,
+          "threshold": 0.01,
+          "passed": true,
+          "hard": true
+        },
+        {
+          "name": "schema_match",
+          "value": 0.0,
+          "threshold": 0.0,
+          "passed": true,
+          "hard": true
+        },
+        {
+          "name": "column_distance:LIMIT_BAL",
+          "value": 0.10155310450813518,
+          "threshold": 0.085,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:SEX",
+          "value": 0.37152194836925523,
+          "threshold": 0.085,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:EDUCATION",
+          "value": 0.28173043636603756,
+          "threshold": 0.085,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:MARRIAGE",
+          "value": 0.02419803458191341,
+          "threshold": 0.085,
+          "passed": true,
+          "hard": false
+        },
+        {
+          "name": "column_distance:AGE",
+          "value": 0.0995490664164036,
+          "threshold": 0.085,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:PAY_1",
+          "value": 0.05093088219697804,
+          "threshold": 0.085,
+          "passed": true,
+          "hard": false
+        },
+        {
+          "name": "column_distance:PAY_2",
+          "value": 0.0848309424281778,
+          "threshold": 0.085,
+          "passed": true,
+          "hard": false
+        },
+        {
+          "name": "column_distance:PAY_3",
+          "value": 0.15604483122257334,
+          "threshold": 0.085,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:PAY_4",
+          "value": 0.16069073780218152,
+          "threshold": 0.085,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:PAY_5",
+          "value": 0.15527343163758828,
+          "threshold": 0.085,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:PAY_6",
+          "value": 0.1785619951134688,
+          "threshold": 0.085,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:BILL_AMT1",
+          "value": 0.07585779433746681,
+          "threshold": 0.085,
+          "passed": true,
+          "hard": false
+        },
+        {
+          "name": "column_distance:BILL_AMT2",
+          "value": 0.10494586195649341,
+          "threshold": 0.085,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:BILL_AMT3",
+          "value": 0.09964211461537076,
+          "threshold": 0.085,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:BILL_AMT4",
+          "value": 0.08959290912692769,
+          "threshold": 0.085,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:BILL_AMT5",
+          "value": 0.10654218885382621,
+          "threshold": 0.085,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:BILL_AMT6",
+          "value": 0.24364520821785685,
+          "threshold": 0.085,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:PAY_AMT1",
+          "value": 0.23400171288727561,
+          "threshold": 0.085,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:PAY_AMT2",
+          "value": 0.16244614710419997,
+          "threshold": 0.085,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:PAY_AMT3",
+          "value": 0.2405370982168763,
+          "threshold": 0.085,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:PAY_AMT4",
+          "value": 0.2098972267634635,
+          "threshold": 0.085,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:PAY_AMT5",
+          "value": 0.19171080619761038,
+          "threshold": 0.085,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:PAY_AMT6",
+          "value": 0.1973702377831717,
+          "threshold": 0.085,
+          "passed": false,
+          "hard": false
+        }
+      ]
+    },
+    "default_ctgan_fill25": {
+      "passed": false,
+      "worst_column": "SEX",
+      "n_rows": 2509,
+      "checks": [
+        {
+          "name": "mean_column_distance",
+          "value": 0.1572533537836061,
+          "threshold": 0.065,
+          "passed": false,
+          "hard": true
+        },
+        {
+          "name": "worst_column_distance",
+          "value": 0.35849355179215203,
+          "threshold": 0.085,
+          "passed": false,
+          "hard": true
+        },
+        {
+          "name": "spearman_diff",
+          "value": 0.09662424810104249,
+          "threshold": 0.055,
+          "passed": false,
+          "hard": true
+        },
+        {
+          "name": "cramers_v_diff",
+          "value": 0.14032814557914583,
+          "threshold": 0.05,
+          "passed": false,
+          "hard": true
+        },
+        {
+          "name": "label_balance",
+          "value": 0.0,
+          "threshold": 0.01,
+          "passed": true,
+          "hard": true
+        },
+        {
+          "name": "schema_match",
+          "value": 0.0,
+          "threshold": 0.0,
+          "passed": true,
+          "hard": true
+        },
+        {
+          "name": "column_distance:LIMIT_BAL",
+          "value": 0.10498839036325086,
+          "threshold": 0.085,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:SEX",
+          "value": 0.35849355179215203,
+          "threshold": 0.085,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:EDUCATION",
+          "value": 0.27977452942385816,
+          "threshold": 0.085,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:MARRIAGE",
+          "value": 0.03416970628489824,
+          "threshold": 0.085,
+          "passed": true,
+          "hard": false
+        },
+        {
+          "name": "column_distance:AGE",
+          "value": 0.09653164229066669,
+          "threshold": 0.085,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:PAY_1",
+          "value": 0.035844941135067955,
+          "threshold": 0.085,
+          "passed": true,
+          "hard": false
+        },
+        {
+          "name": "column_distance:PAY_2",
+          "value": 0.08301976270659177,
+          "threshold": 0.085,
+          "passed": true,
+          "hard": false
+        },
+        {
+          "name": "column_distance:PAY_3",
+          "value": 0.15482945474643875,
+          "threshold": 0.085,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:PAY_4",
+          "value": 0.17750232763257698,
+          "threshold": 0.085,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:PAY_5",
+          "value": 0.17572569988623576,
+          "threshold": 0.085,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:PAY_6",
+          "value": 0.1805544239632351,
+          "threshold": 0.085,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:BILL_AMT1",
+          "value": 0.08463704446013437,
+          "threshold": 0.085,
+          "passed": true,
+          "hard": false
+        },
+        {
+          "name": "column_distance:BILL_AMT2",
+          "value": 0.12082660133214046,
+          "threshold": 0.085,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:BILL_AMT3",
+          "value": 0.09893644557143255,
+          "threshold": 0.085,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:BILL_AMT4",
+          "value": 0.08637723882621257,
+          "threshold": 0.085,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:BILL_AMT5",
+          "value": 0.11108757843936612,
+          "threshold": 0.085,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:BILL_AMT6",
+          "value": 0.2345814235002109,
+          "threshold": 0.085,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:PAY_AMT1",
+          "value": 0.22341869620946714,
+          "threshold": 0.085,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:PAY_AMT2",
+          "value": 0.15203819739645463,
+          "threshold": 0.085,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:PAY_AMT3",
+          "value": 0.23267027250366779,
+          "threshold": 0.085,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:PAY_AMT4",
+          "value": 0.21133542551685858,
+          "threshold": 0.085,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:PAY_AMT5",
+          "value": 0.18494955077842323,
+          "threshold": 0.085,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:PAY_AMT6",
+          "value": 0.19453423226359995,
+          "threshold": 0.085,
+          "passed": false,
+          "hard": false
+        }
+      ]
+    },
+    "default_ctgan_fill50": {
+      "passed": false,
+      "worst_column": "SEX",
+      "n_rows": 5018,
+      "checks": [
+        {
+          "name": "mean_column_distance",
+          "value": 0.15523247181676547,
+          "threshold": 0.065,
+          "passed": false,
+          "hard": true
+        },
+        {
+          "name": "worst_column_distance",
+          "value": 0.3545079001381065,
+          "threshold": 0.085,
+          "passed": false,
+          "hard": true
+        },
+        {
+          "name": "spearman_diff",
+          "value": 0.09543740725748996,
+          "threshold": 0.055,
+          "passed": false,
+          "hard": true
+        },
+        {
+          "name": "cramers_v_diff",
+          "value": 0.1468751740905153,
+          "threshold": 0.05,
+          "passed": false,
+          "hard": true
+        },
+        {
+          "name": "label_balance",
+          "value": 0.0,
+          "threshold": 0.01,
+          "passed": true,
+          "hard": true
+        },
+        {
+          "name": "schema_match",
+          "value": 0.0,
+          "threshold": 0.0,
+          "passed": true,
+          "hard": true
+        },
+        {
+          "name": "column_distance:LIMIT_BAL",
+          "value": 0.10578552069405994,
+          "threshold": 0.085,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:SEX",
+          "value": 0.3545079001381065,
+          "threshold": 0.085,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:EDUCATION",
+          "value": 0.2837601810779035,
+          "threshold": 0.085,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:MARRIAGE",
+          "value": 0.02551477663835603,
+          "threshold": 0.085,
+          "passed": true,
+          "hard": false
+        },
+        {
+          "name": "column_distance:AGE",
+          "value": 0.09394096871553714,
+          "threshold": 0.085,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:PAY_1",
+          "value": 0.0318592894810225,
+          "threshold": 0.085,
+          "passed": true,
+          "hard": false
+        },
+        {
+          "name": "column_distance:PAY_2",
+          "value": 0.09048390135041723,
+          "threshold": 0.085,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:PAY_3",
+          "value": 0.15798234342304426,
+          "threshold": 0.085,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:PAY_4",
+          "value": 0.173118110813127,
+          "threshold": 0.085,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:PAY_5",
+          "value": 0.17751924313055617,
+          "threshold": 0.085,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:PAY_6",
+          "value": 0.1715867077416329,
+          "threshold": 0.085,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:BILL_AMT1",
+          "value": 0.08350130389462829,
+          "threshold": 0.085,
+          "passed": true,
+          "hard": false
+        },
+        {
+          "name": "column_distance:BILL_AMT2",
+          "value": 0.11584453676458367,
+          "threshold": 0.085,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:BILL_AMT3",
+          "value": 0.09774075007521887,
+          "threshold": 0.085,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:BILL_AMT4",
+          "value": 0.08188542342494193,
+          "threshold": 0.085,
+          "passed": true,
+          "hard": false
+        },
+        {
+          "name": "column_distance:BILL_AMT5",
+          "value": 0.10092416672155025,
+          "threshold": 0.085,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:BILL_AMT6",
+          "value": 0.22825622835642015,
+          "threshold": 0.085,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:PAY_AMT1",
+          "value": 0.22461439170568076,
+          "threshold": 0.085,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:PAY_AMT2",
+          "value": 0.1500453715694319,
+          "threshold": 0.085,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:PAY_AMT3",
+          "value": 0.23167385959015652,
+          "threshold": 0.085,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:PAY_AMT4",
+          "value": 0.21552035975360628,
+          "threshold": 0.085,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:PAY_AMT5",
+          "value": 0.18732002260471042,
+          "threshold": 0.085,
+          "passed": false,
+          "hard": false
+        },
+        {
+          "name": "column_distance:PAY_AMT6",
+          "value": 0.1869614941209136,
+          "threshold": 0.085,
+          "passed": false,
+          "hard": false
+        }
+      ]
+    }
+  }
+}

@@ -183,6 +183,8 @@ def _segments_and_counts(request, run, state):
                 frames.append(table.assign(column=column, **info))
     columns = [
         "segment",
+        "segment_lower_bound",
+        "segment_upper_bound",
         "n",
         "positives",
         "precision",
@@ -285,6 +287,10 @@ def _render(narrative, comparison, verdicts, counts, evidence):
                 "[evaluation evidence](evidence.json).",
                 "## Limitations",
                 narrative.limitations,
+                "Constant validation-score predictors were excluded from selection; "
+                "their fits and metrics are retained in the training artifacts and evidence file."
+                if evidence["selection_exclusions"]
+                else "No constant validation-score candidates were flagged.",
                 small,
                 _table(
                     pd.DataFrame(counts),
@@ -330,6 +336,11 @@ def run_evaluation(request: EvaluationInput, run: RunDir, *, client=None) -> Eva
         "test_counts": counts,
         "segment_analysis_available": not segments.empty,
         "verdicts": verdicts,
+        "selection_exclusions": [
+            r.model_dump(mode="json")
+            for r in request.training.records
+            if r.validation_probability_range == 0
+        ],
         "skipped": [
             r.model_dump(mode="json")
             for r in request.training.records

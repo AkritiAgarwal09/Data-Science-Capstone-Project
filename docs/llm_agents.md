@@ -31,15 +31,23 @@ the allowed set, and values outside bounds trigger one retry, then the fixed fal
 A changed rule hash raises `RuleOverrideError` and is logged; it never becomes an
 accepted answer.
 
+Agents take `client=None` and pass it to `run_llm_step`. Tests inject a `FakeLLM`
+through that argument, or through `functools.partial` when the agent is wired into a
+graph run. The pipeline's `llm=` argument only reaches the run narrative; it is not
+handed to the stage agents.
+
+Mark a test that calls the real model with `@pytest.mark.live` and skip it unless
+`RUN_LIVE_LLM=1`. Run live tests with `RUN_LIVE_LLM=1 uv run pytest -m live` once the
+Vertex setup below works. Use at most one per agent.
+
 ## Vertex setup
 
-From the repo root, install the locked dependencies with `uv sync`. Export the team
-project, supported Vertex location, and model (the spike used the values below):
+From the repo root, install the locked dependencies with `uv sync`. Copy
+`.env.example` to `.env`, set your project ID, and export its values with
+`set -a; source .env; set +a`. The example uses the supported Vertex location
+and model from the spike. Then authenticate and check access:
 
 ```sh
-export GOOGLE_CLOUD_PROJECT='<team-project-id>'
-export GOOGLE_CLOUD_LOCATION='global'
-export VERTEX_MODEL='google/gemini-3.5-flash'
 gcloud auth application-default login
 uv run python -m agentic_gan.llm
 ```

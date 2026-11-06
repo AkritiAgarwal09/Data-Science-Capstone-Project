@@ -1,6 +1,6 @@
 # Agentic GAN Framework: System Architecture
 
-Team 23, Columbia Data Science Capstone with TD Bank. Draft v0.2 for the mentor meeting on 16 October 2026. Tracks GitHub issues #4 and #23.
+Team 23, Columbia Data Science Capstone with TD Bank. Draft v0.3, 29 October 2026 (v0.2 was for the mentor meeting on 16 October). Tracks GitHub issues #4, #23 and #77.
 
 v0.2 adds the mentor feedback of 9 October and matches the code merged so far. The main changes from v0.1:
 
@@ -9,6 +9,14 @@ v0.2 adds the mentor feedback of 9 October and matches the code merged so far. T
 - Every agent has a table of the questions it answers and what it returns.
 - The typed handoffs in section 7 are the real classes in `src/agentic_gan/schemas.py`.
 - A dataset table, the framework decision and the Credit Card Fraud findings.
+
+v0.3 answers the mentors' question of which model or template each agent uses. The main changes from v0.2:
+
+- Section 6 gives the model and provider (6.1), the bounded LLM role of every agent next to what stays code and the tools it calls (6.2), the guardrails every LLM step passes through (6.3) and the run narrative (6.4).
+- The Orchestrator and the Model Training Agent no longer have "no LLM" lines. Each has one bounded LLM step, and so does every other agent except the volume rule.
+- The Quality Evaluation Agent's LLM step is built: a failed report carries a `QualityDiagnosis` to Model Selection (section 5.3).
+- The evaluation tools `compare_arms`, `reliable_gain`, `segment_metrics` and `verify_report_numbers` are built in `tools/evaluation.py` (section 5.5).
+- The system overview diagram shows the orchestration layer, the agents with their LLM steps, and the shared runtime.
 
 Paragraphs headed **Implementer notes** list what to keep in mind when building each part.
 
@@ -49,7 +57,7 @@ The four datasets in scope. Numbers come from the EDA and the 9 October slides, 
 
 ## 2. Design principles
 
-1. **Deterministic where it matters, LLM where it helps.** Anything that decides the outcome of the experiment (splits, which GAN to use, whether synthetic data is accepted, which model wins) is a coded rule with logged inputs. The LLM is used for bounded tasks only (section 6).
+1. **Deterministic where it matters, LLM where it helps.** Anything that decides the outcome of the experiment (splits, which GAN to use, whether synthetic data is accepted, which model wins) is a coded rule with logged inputs. The LLM is used for bounded tasks only: it explains, diagnoses, plans from an allowed list or narrates, and every step passes the guardrails in section 6.3.
 2. **Real data is the only evaluation data.** The train, validation and test split is made once, before any cleaning or GAN training. Synthetic records are added to the training set only. Validation and test sets never contain synthetic rows.
 3. **The GAN never sees the test set.** The generator is trained on the training split only, so a gain in the `gan` arm cannot come from leakage.
 4. **Typed handoffs.** Each agent receives and returns a schema-validated object (Pydantic, in `src/agentic_gan/schemas.py`) pointing to artifacts on disk. The orchestrator rejects an output that fails validation.
@@ -63,25 +71,35 @@ The four datasets in scope. Numbers come from the EDA and the 9 October slides, 
 flowchart TD
     CFG[Run config + dataset path] --> S0
 
-    subgraph ORC[Orchestrator: state, retries, decision log, manifest]
+    subgraph ORC[Orchestration layer, code: state, retries, rule lock, decision log, manifest]
         S0[S0 Validate schema,<br/>split train/val/test]
         VOL[Volume rule<br/>smallest fill level with a reliable gain, else none]
+        NAR[LLM: run narrative<br/>from the decision log]
     end
 
-    S0 --> PRE[Pre-processing Agent<br/>profile, clean<br/>raw and baseline files]
-    PRE --> SEL[Model Selection Agent<br/>choose GAN, train,<br/>generate per fill level]
-    SEL --> QE{Quality Evaluation Agent<br/>gate per fill level}
+    S0 --> PRE[Pre-processing Agent<br/>profile, clean<br/>LLM: picks treatments from the allowed table]
+    PRE --> SEL[Model Selection Agent<br/>choose GAN, train, generate per fill level<br/>LLM: explains the rule, proposes retry settings]
+    SEL --> QE{Quality Evaluation Agent<br/>gate per fill level<br/>LLM: diagnoses a FAIL}
     QE -- FAIL, attempts left --> SEL
     QE -- FAIL, attempts exhausted: no GAN arm --> TRN
-    QE -- PASS: passing fill levels --> TRN[Model Training Agent<br/>raw, baseline, SMOTE, GAN]
+    QE -- PASS: passing fill levels --> TRN[Model Training Agent<br/>raw, baseline, SMOTE, GAN<br/>LLM: plans arms and levels, writes the summary]
     TRN --> VOL
-    VOL --> EVA[Evaluation Agent<br/>metrics, SHAP, segments, report]
+    VOL --> EVA[Evaluation Agent<br/>metrics, SHAP, segments, report<br/>LLM: writes the narrative]
     EVA --> OUT[Run folder: report, logs, artifacts]
+    OUT --> NAR
+
+    RT[Shared LLM runtime: Gemini on Vertex AI<br/>allowed options and bounds, rule-hash lock,<br/>one retry then a fallback, every step logged]
+    PRE -.-> RT
+    SEL -.-> RT
+    QE -.-> RT
+    TRN -.-> RT
+    EVA -.-> RT
+    NAR -.-> RT
 ```
 
 ![System overview](architecture_diagram.png)
 
-The orchestrator owns control flow and state. Sub-agents do not call each other. They return results to the orchestrator, which decides the next step. This keeps retries, logging and failure handling in one place. The picture above is a static copy of the diagram for slides.
+The orchestrator owns control flow and state. Sub-agents do not call each other. They return results to the orchestrator, which decides the next step. This keeps retries, logging and failure handling in one place. Each agent can have one LLM step, shown in the diagram. It runs inside the agent's own function through the shared runtime (section 6), so the graph's routing stays deterministic. The picture above is a static copy of the diagram for slides.
 
 ### Shared state
 
@@ -140,12 +158,14 @@ The code is in `src/agentic_gan/orchestrator/`: `create_run` makes the folder, `
 4. Apply the gate logic: on a `FAIL` verdict, re-invoke the Model Selection Agent with adjusted settings, up to `max_attempts` (default 3). After that, set `gan_available = false` with a reason and continue. Training still runs the `raw`, `baseline` and `smote` arms.
 5. Handle failures: agent timeout, schema-validation error or exception gives `max_stage_retries` retries (default 1), then marks the stage `FAILED` and stops the run with a partial report.
 6. Assemble the manifest and hand the final state to the Evaluation Agent.
+7. Lock the rules: log a hash of the rule set and thresholds when the run starts and check it at every stage, so that no agent can change a rule or a threshold (issue #78). `run_llm_step` already compares the hash around each LLM call (section 6.3).
+8. After the run, or after a failed stage, ask the LLM for the run narrative: a plain-language summary of the decision log (section 6.4).
 
-**Outputs.** `manifest.json`, `decisions.jsonl`, and the final `RunState` (`state.json`): status and attempts per stage, `gan_available` with its reason when false, and `volume_decision` (the fill level chosen by the volume rule, where 0.0 means real data only). The volume rule is issue #36. Until it exists, `volume_decision` stays unset.
+**Outputs.** `manifest.json`, `decisions.jsonl`, and the final `RunState` (`state.json`): status and attempts per stage, `gan_available` with its reason when false, and `volume_decision` (the fill level chosen by the volume rule, where 0.0 means real data only). The volume rule is issue #36. Until it exists, `volume_decision` stays unset. The run narrative is written to `report/` (section 6.4).
 
-**Tools.** `validate_config` (building a `RunConfig` validates it), `validate_schema` and `split_data` (`orchestrator/split.py`), `write_manifest` (`Manifest.register` and `Manifest.save`), `log_decision`, plus the sub-agents themselves.
+**Tools.** `validate_config` (building a `RunConfig` validates it), `validate_schema` and `split_data` (`orchestrator/split.py`), `write_manifest` (`Manifest.register` and `Manifest.save`), `log_decision`, the rule-hash check, the narrative step (`run_llm_step`), plus the sub-agents themselves.
 
-**Decision logic.** Fully deterministic: stage order, retry counts, gate routing. No LLM call decides control flow.
+**Decision logic.** Control flow is fully deterministic: stage order, retry counts, gate routing and the rule lock are code. The LLM has one bounded task, the run narrative (section 6.4). It cannot change a route, a retry count or the rule set.
 
 **Success.** All stages `SUCCESS` or `SKIPPED` with a reason, and `Manifest.verify()` returns no problems: every referenced artifact exists and its hash matches.
 
@@ -207,6 +227,8 @@ flowchart LR
 - Choose the smallest level whose mean is within one spread of the best reliable level. If no level is reliable, `volume_decision` is 0.0 with the reason "no reliable gain".
 - The seed spread measures training randomness, not the noise from a small validation set. For datasets with few validation positives (Credit Card Fraud has about 94 after dropping duplicates), also bootstrap the validation rows and require the gain to hold there.
 
+**Building blocks (issue #75).** `compare_arms` and `reliable_gain` in `tools/evaluation.py` (section 5.5) give the mean, the seed-to-seed spread and the paired lift for each fill level. `reliable_gain` is the reporting rule: the lift must exceed the spread of the paired difference on both validation and test. The proposal above measures the spread on `baseline` alone, and the volume choice must not read test data, so issue #36 should settle which spread it uses and take only the validation half.
+
 **Where it runs.** The orchestrator calls `choose_volume` (`tools/volume.py`, issue #36, if time permits) after training and before evaluation. Until that tool exists, `volume_decision` stays unset and the report says the volume rule did not run. Training evaluates every accepted level in one pass instead of adding volume step by step. That costs more compute but is simpler and reproducible, which is why the Credit Card Fraud grid is reduced (`docs/fraud_dataset_recommendation.md`).
 
 ## 5. Sub-agents
@@ -251,7 +273,7 @@ flowchart LR
 
 **Tools.** `profile_dataframe`, `detect_placeholders`, `impute`, `encode`, `plot_distributions`, `write_treatment_log`.
 
-**Decision logic.** Rule table above. The LLM may write the plain-language summary of the profile. It does not choose treatments.
+**Decision logic.** The rule table above is the allowed set. For each affected column the LLM picks a treatment from it, with a one-line reason (issue #74). Code checks the choice against the table, applies it fitted on the training rows only, and logs it. A choice outside the table is rejected and the table's own rule applies. Dataset rules in the config, such as excluding `duration` and the missingness rule, stay read-only.
 
 **Success.** No unresolved NaN in the `baseline` files (the `raw` files keep missing values by design), every column has a treatment-log row, and train-only fitting is confirmed by the fitted transformer's recorded row count.
 
@@ -279,7 +301,7 @@ flowchart LR
 | Which generator fits this data, and why? | The selection rules below: column-type mix, row count, entity and time structure | `generator` and `rationale` |
 | Is there enough data to generate at all? | `min_rows` and the structure checks | `SKIPPED` with a reason |
 | How many rows at each fill level? | `fill_rows(level, positives, negatives)` | One `SyntheticSet` per fill level |
-| Which settings on a retry? | The failing checks in `previous_report`, inside `gan_bounds` | `hyperparameters` |
+| Which settings on a retry? | The failing checks and the diagnosis in `previous_report`, inside `gan_bounds` | `hyperparameters` |
 | Did training behave? | The loss history: finite and not collapsed | `loss_history_path`. A collapse counts as a failed attempt |
 
 **Inputs.** `ModelSelectionInput`: the config, the `PreprocessOutput` (the `baseline` training split and `profile.json` are the data to use), the quality-gate attempt number (from 1) and, on a retry, the `QualityReport` that failed.
@@ -307,7 +329,7 @@ For the primary dataset, the rules choose CTGAN. `bank-full` has no customer ide
 
 **Tools.** `describe_data_characteristics`, `train_ctgan`, `train_timegan`, `train_fallback_gan`, `sample_synthetic`.
 
-**Decision logic.** Selection is rule-based. On a retry, the LLM may propose new hyperparameters, but only values inside bounds fixed in the config, and the proposal is logged. Training itself is a tool call.
+**Decision logic.** The generator is chosen by the rules above (`select_generator` in `tools/selection.py`). That choice stays code and read-only. The LLM explains the outcome in plain language from the logged decision steps. After a quality-gate `FAIL` it reads the `QualityDiagnosis` in `previous_report` (section 5.3) and proposes new CTGAN settings (epochs, `pac`, discriminator steps, batch size); code clamps them to `gan_bounds` and logs them (issue #82). Without an LLM answer, the retry rule applies: more epochs inside the bounds, unless a privacy check failed. Skipped routes (TimeGAN, WGAN-GP) are logged with a reason. Training itself is a tool call. The explanation runs once, on attempt 1. The settings proposal runs on a retry (attempt 2 with the default `max_attempts` of 3); every value must lie inside `gan_bounds`, a setting without a bound cannot change, epochs are never raised after a privacy failure, `batch_size` is made divisible by `pac`, and an answer that cannot be made valid is replaced by the rule's retry and logged. The diagnosis adjustments `rebalance_categories` and `change_sampling` have no CTGAN setting, so they are logged as `unsupported_adjustment` and not applied.
 
 **Success.** Training completes, the checkpoint loads, and synthetic files match the real schema (columns, types, category sets).
 
@@ -337,6 +359,7 @@ For the primary dataset, the rules choose CTGAN. `bank-full` has no customer ide
 | Can a classifier tell it from real data? | Discriminator feedback (reported only for now) | A `CheckResult` with `hard = false` |
 | Does it match the requested volume? | Achieved fill level against requested | A `CheckResult` |
 | Pass or fail, and which fill levels pass? | The hard checks at each level | `verdict`, `levels`, `passing_levels` |
+| Why did it fail, and what should change? | An LLM diagnosis of the failed checks, kept only if it matches the results | `diagnosis` (`QualityDiagnosis`) |
 
 **Inputs.** `QualityInput`: the config (thresholds in `quality_gate`, and the sanity rules), the `PreprocessOutput` (the real `baseline` training and validation files) and the `GeneratorOutput` (the synthetic files).
 
@@ -362,13 +385,13 @@ For the primary dataset, the rules choose CTGAN. `bank-full` has no customer ide
 - Zero sanity violations after the config rule list.
 - Diversity and discriminator feedback are reported but do not gate (`hard = false`) until their thresholds are calibrated (issue #12). They still inform the retry. The 9 October discussion lists validity, diversity, duplication and discriminator feedback as the quality checks.
 
-The checks run on each synthetic set, that is, at each fill level. A level passes when all of its hard checks pass. The verdict is `PASS` if at least one level passes and `FAIL` if none does. On `FAIL`, the orchestrator retries the Model Selection Agent, which receives this report with its failing metrics.
+The checks run on each synthetic set, that is, at each fill level. A level passes when all of its hard checks pass. The verdict is `PASS` if at least one level passes and `FAIL` if none does. On `FAIL`, the orchestrator retries the Model Selection Agent, which receives this report with its failing metrics and its diagnosis.
 
-**Outputs.** `QualityReport`: the overall `verdict` (`PASS` or `FAIL`); one `LevelReport` per fill level, holding its checks (name, value, threshold, passed, hard) and whether the level passed; the path to `quality_report.json`; and plots (per-column real vs synthetic distributions, correlation heatmaps). `passing_levels` lists the levels that passed.
+**Outputs.** `QualityReport`: the overall `verdict` (`PASS` or `FAIL`); one `LevelReport` per fill level, holding its checks (name, value, threshold, passed, hard) and whether the level passed; the path to `quality_report.json`; on a `FAIL`, a `QualityDiagnosis` (see Decision logic); and plots (per-column real vs synthetic distributions, correlation heatmaps). `passing_levels` lists the levels that passed.
 
-**Tools.** `ks_test`, `js_divergence`, `wasserstein`, `correlation_diff`, `tstr_trtr`, `dcr_privacy`, `sanity_rules`, `diversity_checks`, `discriminator_check`, `plot_comparison`.
+**Tools.** `ks_test`, `js_divergence`, `wasserstein`, `correlation_diff`, `tstr_trtr`, `dcr_privacy`, `sanity_rules`, `diversity_checks`, `discriminator_check`, `plot_comparison`, and `run_llm_step` for the diagnosis.
 
-**Decision logic.** Deterministic. The verdict is computed from the thresholds. The LLM only writes the prose summary of the report and never changes the verdict.
+**Decision logic.** The verdict is computed from the thresholds and stays code. When it is `FAIL`, one LLM step returns a `QualityDiagnosis` (issue #76): the checks and columns that failed, the likely cause, and suggested adjustments from an allowed list (`more_epochs`, `change_pac`, `rebalance_categories`, `change_sampling`). Code keeps the diagnosis only if every check and column it names is in the results. Otherwise, or if the call fails, a rule-based default is used and `LLM_FALLBACK` is logged. The diagnosis cannot change the verdict, a threshold or a rule.
 
 **Success.** All metrics computed with no NaN, and a verdict recorded with the thresholds that produced it.
 
@@ -381,6 +404,8 @@ The checks run on each synthetic set, that is, at each fill level. A level passe
 - Report each fill level in the generator output once, and no level twice.
 - For the label-balance check, take the requested rows from `fill_rows(level, ...)` with the `baseline` class counts in the `PreprocessOutput`, and compare them with `SyntheticSet.rows`.
 - Put the path of `quality_report.json` in `report_path` and the plots in `plot_paths`, so the manifest records them.
+- The diagnosis is made only for a `FAIL` verdict. It is stored in `quality_report_attempt_N.json` and in the `QualityReport` that Model Selection receives as `previous_report`. Its adjustments are suggestions: Model Selection turns them into settings inside `gan_bounds`.
+- On the committed CTGAN v1 sets for Bank, the diagnosis names `job`, `day_of_month` and `month`, and the classifier AUC of 0.86. The test uses a fake LLM and a `live` test is skipped by default (section 6.3).
 
 ### 5.4 Model Training Agent (issue #9)
 
@@ -417,7 +442,7 @@ The checks run on each synthetic set, that is, at each fill level. A level passe
 
 **Tools.** `build_arm_dataset`, `fit_model`, `tune_model`, `calibrate`, `save_predictions`.
 
-**Decision logic.** Deterministic. Same search space, folds and budget for every arm so that arms are comparable.
+**Decision logic.** The models, the frozen thresholds, the metrics and the search budget are code, and are the same for every arm so that arms are comparable. The LLM receives the quality report (which fill levels passed), the dataset sizes and any small-evaluation-set warning, and returns a `TrainingPlan` (issue #80): which arms and fill levels to run (the `gan` arm only for levels that passed), the seeds from the config, and whether to add repeated cross-validation. Code validates the plan against the allowed options and rejects one that trains on a failed level. After the run the LLM writes a short summary from the result table.
 
 **Success.** Every arm, fill level, model and seed has predictions saved or a `SKIPPED` record with a reason, and no synthetic or resampled row appears in any validation or test file (checked by the `is_synthetic` flag).
 
@@ -456,15 +481,24 @@ The checks run on each synthetic set, that is, at each fill level. A level passe
 4. Segment analysis: metrics by age band, job, marital status and education, to look for bias amplification or segments where augmentation hurts.
 5. Report generation: the final report, built from the result files.
 
-**Report rules.** The LLM writes prose from structured result files only. Every number in the report is inserted from a result file by a template or checked against one, and a check script fails the run if a quoted number is not found in the results. The report must include a section on negative or inconclusive results, the data-treatment log, the quality report, limitations, and the ethical statements from the proposal.
+**Report rules.** The LLM writes prose from structured result files only. Every number in the report is inserted from a result file by a template or checked against one, and `verify_report_numbers` rejects the report if a quoted number is not found in the results. The report must include a section on negative or inconclusive results, the data-treatment log, the quality report, limitations, and the ethical statements from the proposal.
 
 **Outputs.** `EvaluationOutput`: the metrics tables, the path to `final_report.md` (and PDF export), and whether the report numbers were verified. Also the SHAP plots and segment tables.
 
-**Tools.** `compute_metrics`, `compare_arms`, `shap_analysis`, `segment_metrics`, `render_report`, `verify_report_numbers`.
+**Tools.** `compute_metrics`, `compare_arms`, `reliable_gain`, `shap_analysis`, `segment_metrics`, `render_report`, `verify_report_numbers`.
 
-**Decision logic.** Deterministic for numbers and comparisons. The LLM writes the narrative within the fixed report outline.
+**Evaluation tools (built, issue #75).** `tools/evaluation.py` is the deterministic half of this agent. The LLM reads what these functions return and never computes a number. They read the training agent's `metrics.csv`, which labels the arms `original` (`raw`), `cleaned` (`baseline`), `smotenc` (`smote`) and `ctgan` (`gan`).
 
-**Success.** Report generated, number verification passes, all required sections present. `numbers_verified` must be true: an output with status `SUCCESS` and unverified numbers is rejected, so if verification fails, return `FAILED` with a reason.
+| Function | What it returns |
+|---|---|
+| `compare_arms(metrics)` | For each dataset, arm, fill level, split and metric (PR-AUC, F1, precision, recall): the mean and the seed-to-seed spread (sample standard deviation) of the model selected on validation for each seed, and the paired difference from the `original` arm at the same seeds |
+| `reliable_gain(comparison, dataset=, arm=, fill_level=)` | The verdict with its numbers. **Reliable gain**: on both validation and test, the mean paired lift is larger than the seed-to-seed spread of that lift, with at least three paired seeds. **Reliable loss**: the lift is below minus the spread on both. Otherwise **inconclusive** |
+| `segment_metrics(predictions, features, column)` | Precision, recall, F1 and PR-AUC within the segments of a column, with segments of few positives flagged. A missing column gives an empty table |
+| `verify_report_numbers(report_text, result_files)` | Which quoted numbers are not in the results. A decimal matches a result that rounds to it, a percentage matches the share, and a whole number must match exactly |
+
+**Decision logic.** Numbers and comparisons are code (the tools above). The LLM writes the narrative from the structured results within the fixed report outline (issue #79): what improved and for whom, what is inconclusive, and caveats such as small test sets. Every number in the report must pass `verify_report_numbers`. If one does not, the report is regenerated once and then replaced by a plain template filled from the result files. The report always has a section for negative or inconclusive results.
+
+**Success.** Report generated, number verification passes, all required sections present. `numbers_verified` must be true: an output with status `SUCCESS` and unverified numbers is rejected, so if the template cannot be verified either, return `FAILED` with a reason.
 
 **Implementer notes.**
 
@@ -476,17 +510,71 @@ The checks run on each synthetic set, that is, at each fill level. A level passe
 
 ## 6. Where the LLM is used
 
-| Agent | LLM task | Not delegated to the LLM |
-|---|---|---|
-| Orchestrator | None for control flow | Stage order, retries, gate routing |
-| Pre-processing | Plain-language profile summary | Treatment choice |
-| Model Selection | Hyperparameter proposals on retry, within bounds | Generator choice, training |
-| Quality Evaluation | Prose summary | Verdict |
-| Model Training | None | All |
-| Volume rule | None | The choice of fill level |
-| Evaluation | Report narrative | Metrics, comparisons, SHAP |
+Each agent has at most one LLM step per attempt. Model selection has an explain step on attempt 1 and a settings proposal on a retry. The LLM never decides a route, a verdict, a threshold, a rule or a metric. It explains, diagnoses, plans from an allowed list, or narrates, and code checks what it returns. This section gives the model and provider (6.1), the bounded role of each agent (6.2), the guardrails every step passes through (6.3), the run narrative (6.4) and notes for adding a step (6.5). Status is as of 29 October 2026.
 
-This split is deliberate. It keeps the experiment reproducible, makes the agent decisions auditable, and limits the LLM to places where wording or a bounded search helps. It is also the answer to the mentor request to add deterministic rules and evaluation criteria (issue #12).
+### 6.1 Model and provider
+
+All steps use one model through one client, `VertexClient` in `src/agentic_gan/llm/`.
+
+| Item | Setting |
+|---|---|
+| Model | Gemini on Vertex AI. The setup note uses `google/gemini-3.5-flash`; the model comes from the `VERTEX_MODEL` environment variable |
+| Endpoint | Vertex AI's OpenAI-compatible Chat Completions endpoint. Project and location come from `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION` |
+| Credentials | Application Default Credentials (`gcloud auth application-default login`), with the access token refreshed before every call. No key is stored in the repo |
+| Output | A strict JSON schema generated from the step's Pydantic class, at temperature 0 |
+| Entry point | `run_llm_step(role, system_prompt, context, output_model, options, run)` returns a validated Pydantic object, or the logged fallback. Setup and tests are in `docs/llm_agents.md` |
+
+Why this model and provider:
+
+- **The team already has access.** Vertex AI runs on the team's Google Cloud credits (question 8 in section 12), so there is no extra vendor, contract or API key.
+- **It was tested in the framework spike.** Both frameworks reached Gemini through this endpoint with structured output, and 13 live gate scenarios per framework cost about $0.02 in tokens (`docs/framework_decision.md`).
+- **Typed answers fit the design.** The Pydantic class that describes a reply also validates it, like every other handoff (section 7).
+- **The tasks are small.** A step picks from an allowed list, explains a table or writes a short summary, and code does the rest, so a fast, inexpensive model is enough for now.
+- **Only one file knows the provider.** Changing the model is an environment variable. Changing the provider means changing `VertexClient` only.
+
+### 6.2 The LLM role of each agent
+
+| Agent | The LLM decides, inside bounds | Stays code | Tools it calls | Status |
+|---|---|---|---|---|
+| Orchestrator | Nothing about the run. After a run or a failed stage it writes a plain-language summary of the decision log: what happened, why, and what to do next (6.4) | Stage order, retries, quality-gate routing, the rule lock, the split, the manifest | `validate_schema`, `split_data`, `Manifest.register` and `verify`, `log_decision`, the rule-hash check | Narrative and rule lock: Sprint 3 (#78). The graph, state, manifest and decision log are built |
+| Pre-processing | For each affected column, a treatment chosen from the allowed rule table (keep a placeholder as its own category, median or mode, model-based fill with a missing flag, drop for leakage), with a one-line reason | The profile, checking the choice against the table, applying it fitted on training rows only, the treatment log. Dataset rules in the config, such as excluding `duration` and the missingness rule, cannot be overridden | `profile_dataframe`, `Preprocessor`, `write_treatment_log` | Sprint 3 (#74). The preprocessing tools are built |
+| Model Selection | A plain-language explanation of the selection outcome from the logged decision steps. After a quality `FAIL`, new CTGAN settings (epochs, `pac`, discriminator steps, batch size) proposed from the diagnosis | The generator choice (read-only), training, clamping every proposal to `gan_bounds`, logging skipped routes (TimeGAN, WGAN-GP) with a reason | `select_generator`, `train_ctgan`, `sample_synthetic` | Built (#82) |
+| Quality Evaluation | On a `FAIL`, a `QualityDiagnosis`: the checks and columns that failed, the likely cause, and adjustments from an allowed list (`more_epochs`, `change_pac`, `rebalance_categories`, `change_sampling`) | Every check, the thresholds, the per-level result and the verdict. The diagnosis is kept only if it names checks and columns that are in the results | `fidelity_checks`, `quality_privacy_checks`, `run_llm_step` | Built (#76) |
+| Model Training | A `TrainingPlan`: which arms and fill levels to run (the `gan` arm only for levels that passed), the seeds from the config, and whether to add repeated cross-validation. Then a short summary of the result table | Fitting the four models, the frozen thresholds, metrics, predictions and the `is_synthetic` checks. A plan that trains on a failed level is rejected | `run_models`, `load_protocol`, `smotenc_rows` | Sprint 3 (#80). The training run is built |
+| Volume rule | Nothing | The choice of fill level: the smallest with a reliable gain, else none | `compare_arms`, `reliable_gain` | The rule is not built yet (#36, if time permits). Its tools are built (#75) |
+| Evaluation | The narrative written from the structured results: what improved and for whom, what is inconclusive, and caveats such as small test sets | All metrics and comparisons, SHAP, the reliable-gain verdicts and the number check. A report with a number that is not in the results is regenerated once, then replaced by a template | `compare_arms`, `reliable_gain`, `segment_metrics`, `verify_report_numbers`, SHAP and report rendering | Tools built (#75). The agent is Sprint 3 (#79) |
+
+This split is deliberate. It keeps the experiment reproducible, makes the agent decisions auditable, and limits the LLM to places where wording or a bounded choice helps. It is also the answer to the mentor request to add deterministic rules and evaluation criteria (issue #12).
+
+### 6.3 Guardrails
+
+Every LLM step goes through `run_llm_step` (`src/agentic_gan/llm/runtime.py`), which enforces items 1 to 4 and 6. Items 5, 7 and 8 are the agent's and the tests' part.
+
+1. **Typed answers.** The step returns an instance of its Pydantic class. Unknown fields make the answer invalid.
+2. **Allowed options and bounds.** `allowed_options` lists the values a field may take and `numeric_bounds` the range of a number. An answer outside either is invalid. A list of choices is limited by a `Literal` type in the schema instead, as in the quality diagnosis's `adjustments`, because `allowed_options` checks single-valued fields.
+3. **Read-only rules.** Before and after every call the runtime compares a hash of the rules and thresholds with the one locked for the run. If it changed, the call raises `RuleOverrideError`, `RULE_OVERRIDE_REJECTED` is logged and the answer is never used. Settings the LLM may change are clamped to `gan_bounds` in the config. The orchestrator's own lock over the whole run is issue #78.
+4. **One retry, then a fallback.** If the call fails or the answer is invalid, the runtime retries once. After a second failure it returns the agent's deterministic default and logs `LLM_FALLBACK` with the reason. A run never depends on the LLM being available.
+5. **Grounding.** Each agent checks that an answer refers only to things that exist (6.2 shows which agents are built): the quality diagnosis may name only checks and columns in the results, a training plan cannot use a level that failed the gate, a treatment must come from the table, and every number in a report must pass `verify_report_numbers`. A failed check means the default is used and `LLM_FALLBACK` is logged.
+6. **Logging.** Every step is a `log_decision` line in `decisions.jsonl` with the system prompt, the context sent, the allowed options and bounds, the rule hash and the outcome: the validated answer, `LLM_FALLBACK` with a reason, or `RULE_OVERRIDE_REJECTED`.
+7. **Summaries, not rows.** By design the context is a summary: the training-split profile, check results, result tables or the decision log. Dataset rows are not put in a prompt. The runtime does not enforce this, so it is a rule for whoever writes a step. It matters most for IEEE-CIS, whose terms forbid redistributing the data.
+8. **Tests.** Tests use `FakeLLM`, which returns scripted answers with no credentials and no network. Each agent may have one test marked `live` that calls the real model. It is deselected by default and runs with `uv run pytest -m live`.
+
+### 6.4 The run narrative
+
+After a run, or after a failed stage, the orchestrator asks the LLM for a plain-language summary of the decision log (`decisions.jsonl`): what happened, why, and what to do next (issue #78, `orchestrator/narrative.py`). The summary is for people. It is written under `report/`, and it cannot change a route, a retry count or the state. If the call fails, the deterministic default, a plain template filled from the decision log, is used and `LLM_FALLBACK` is logged.
+
+For example, the narrative of a run whose first attempt used CTGAN v1 on Bank Marketing would open like this. This is an illustration of the format with the real v1 numbers, not a recorded run.
+
+> Attempt 1 of 3: CTGAN failed the quality gate at all three fill levels. Hard checks failed at every level, including the mean column distance (0.106 against a limit of 0.10) and the PR-AUC gain (-0.052 at 25% fill). A classifier told real from synthetic rows with AUC 0.86, where two real samples score 0.52, and the quality diagnosis pointed at `job`, `day_of_month` and `month`. Next: Model Selection retries with new settings inside the configured bounds. If all three attempts fail, the run continues without the `gan` arm and the report says why.
+
+### 6.5 Adding an LLM step
+
+- Build on `run_llm_step`, and give it a deterministic fallback that is itself a valid answer.
+- Limit choices with `allowed_options`, `numeric_bounds` or `Literal` types, then check the grounding of the answer in code.
+- Let the agent function take a `client=None` argument and pass it to `run_llm_step`, as `run_quality` does, so tests can inject a `FakeLLM`.
+- The rule hash is passed in by the agent. Until the orchestrator's lock exists (#78), `run_quality` hashes `quality_gate`, `sanity_rules` and `gan_bounds` itself, and each new step should use the shared function once it exists.
+- Model selection hashes `min_rows`, `gan_bounds`, the step order, `CTGAN_DEFAULTS`, `EPOCH_STEP` and `PRIVACY_CHECKS` itself (a local `_rule_hash`), because importing `graph.rule_hash` would be circular.
+- Put a summary in the prompt, never rows (6.3, item 7).
 
 ## 7. Handoff contracts
 
@@ -508,7 +596,7 @@ Key fields of the outputs:
 | `SplitOutput` | train, validation and test paths, target, seed, positive and negative counts in the training split |
 | `PreprocessOutput` | `raw` and `baseline` file sets, profile path, plots, treatment log, fitted transformer and its fit row count, `baseline` class counts |
 | `GeneratorOutput` | generator, rationale, hyperparameters, checkpoint, loss history, one synthetic set (fill level, rows, path) per fill level |
-| `QualityReport` | verdict, one report per fill level (checks with value, threshold, passed, hard), report path, passing levels |
+| `QualityReport` | verdict, one report per fill level (checks with value, threshold, passed, hard), report path, passing levels, diagnosis (on a `FAIL`) |
 | `TrainingOutput` | one record per arm, fill level, model and seed: model and prediction paths, hyperparameters |
 | `EvaluationOutput` | metrics tables, report path, whether the numbers were verified |
 
@@ -553,7 +641,7 @@ Rules that apply to every output:
 
 ## 10. Mapping to workstreams
 
-Status as of 15 October 2026. "Sprint 1 tasks" are the issues of the sprint that ends on 16 October.
+Status as of 15 October 2026. "Sprint 1 tasks" are the issues of the sprint that ends on 16 October. The status of each LLM step is in section 6.2.
 
 | Component | Issue | Owners | Sprint 1 tasks | Code |
 |---|---|---|---|---|
@@ -576,6 +664,7 @@ What this means for the code:
 
 - `RunState` is one key of the graph state, and every node returns a new `RunState`.
 - Pydantic classes are the stage outputs. The orchestrator validates each one with `STAGE_IO`.
+- LLM steps are not graph nodes. An agent calls `run_llm_step` inside its own function, so the graph's routing stays deterministic.
 - `log_decision` is our own audit log with the full schema (agent, rule, inputs, outcome, rationale). It is separate from any framework tracing.
 - Durable checkpoints are added only if a run must resume across processes.
 - Revisit the choice if most future control flow becomes model-selected handoffs.

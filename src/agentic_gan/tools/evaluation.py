@@ -143,7 +143,18 @@ def segment_metrics(
     column with many values is cut into `bins` quantile bands. A column that is missing gives an
     empty table. Segments with fewer than `min_positives` positives are flagged `small`.
     """
-    names = ["segment", "n", "positives", "precision", "recall", "f1", "pr_auc", "small"]
+    names = [
+        "segment",
+        "n",
+        "positives",
+        "precision",
+        "recall",
+        "f1",
+        "pr_auc",
+        "small",
+        "segment_lower_bound",
+        "segment_upper_bound",
+    ]
     if column not in features:
         return pd.DataFrame(columns=names)
     values = (
@@ -151,8 +162,13 @@ def segment_metrics(
     )
     if not values.index.is_unique:
         raise ValueError("features has repeated source_row values")
+    bounds = {}
     if pd.api.types.is_numeric_dtype(values) and values.nunique() > MAX_CATEGORIES:
-        values = pd.qcut(values, bins, duplicates="drop").astype(str)
+        bands = pd.qcut(values, bins, duplicates="drop")
+        # Store the displayed bounds as numbers so report verification can ground
+        # interval labels (including qcut's adjusted lower endpoint).
+        bounds = {str(band): (float(band.left), float(band.right)) for band in bands.cat.categories}
+        values = bands.astype(str).where(bands.notna())
     data = predictions.assign(segment=predictions["source_row"].map(values)).dropna(
         subset=["segment"]
     )
@@ -164,6 +180,8 @@ def segment_metrics(
         rows.append(
             {
                 "segment": str(segment),
+                "segment_lower_bound": bounds.get(str(segment), (np.nan, np.nan))[0],
+                "segment_upper_bound": bounds.get(str(segment), (np.nan, np.nan))[1],
                 "n": len(part),
                 "positives": positives,
                 "precision": precision_score(y, predicted, zero_division=0),
