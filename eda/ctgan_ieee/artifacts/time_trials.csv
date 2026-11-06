@@ -1,0 +1,5 @@
+rows,fraud_rows,columns,epochs,batch_size,pac,fraud_only,width,seconds
+5000,169,540,1,500,10,False,1710,101.8
+5000,169,540,3,500,10,False,1710,120.3
+20000,677,540,2,500,10,False,1791,193.2
+3383,3383,540,3,500,10,True,1818,107.0
