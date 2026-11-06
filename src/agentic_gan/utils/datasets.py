@@ -22,6 +22,9 @@ class DatasetConfig:
     merge: dict | None = None  # second table joined onto `file`: file, on, how
     duplicates: dict | None = None  # drop, ignore_columns, keep, before_split
     sample: dict | None = None  # part, rows, stratify, seed, max_missing
+    # CTGAN stage settings for a dataset too big to train on in full: train_on, epochs,
+    # batch_size, pac, discriminator_steps, max_minutes. None means the tool's defaults.
+    ctgan: dict | None = None
 
 
 def load_configs(path=None):

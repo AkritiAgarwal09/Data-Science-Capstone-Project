@@ -1,0 +1,15 @@
+{
+  "label": "v1",
+  "train_rows": 3383,
+  "epochs": 300,
+  "pac": 10,
+  "discriminator_steps": 1,
+  "batch_size": 500,
+  "train_seconds": 1731.5,
+  "fill_rows": {
+    "0.1": 9323,
+    "0.25": 23308,
+    "0.5": 46617
+  },
+  "width": 1818
+}
