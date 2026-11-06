@@ -1,4 +1,5 @@
 """Audit a run folder and print a checklist table."""
+
 import json
 import sys
 from pathlib import Path
@@ -23,10 +24,13 @@ def audit(run_path: Path) -> None:
         return
     decisions = pd.read_json(decisions_path, lines=True)
 
+    # decisions.jsonl uses "agent" (not "stage") as the grouping field
     print("\n[2] SELECTION STEPS (attempt 1)")
-    sel = decisions[decisions["stage"] == "model_selection"]
-    gates = ["dcgan_excluded","size_gate","horizon_gate","missing_gate",
-             "leakage_gate","minority_gate","temporal_test","type_routing","fallback"]
+    sel = decisions[decisions["agent"] == "model_selection"]
+    gates = [
+        "dcgan_excluded", "size_gate", "horizon_gate", "missing_gate",
+        "leakage_gate", "minority_gate", "temporal_test", "type_routing", "fallback",
+    ]
     for gate in gates:
         rows = sel[sel["rule"] == gate]
         if not rows.empty:
@@ -36,7 +40,11 @@ def audit(run_path: Path) -> None:
                 print(f"    {str(r['rationale'])[:120]}")
 
     print("\n[3] HYPERPARAMETERS PER ATTEMPT")
-    for rule in ["hyperparameters","hyperparameter_retry","retry_unchanged","unsupported_adjustment"]:
+    hyp_rules = [
+        "hyperparameters", "hyperparameter_retry",
+        "retry_unchanged", "unsupported_adjustment",
+    ]
+    for rule in hyp_rules:
         rows = decisions[decisions["rule"] == rule]
         for _, r in rows.iterrows():
             attempt = r.get("attempt", "?")
@@ -44,8 +52,8 @@ def audit(run_path: Path) -> None:
             print(f"  attempt={attempt} {rule}: {r['outcome']} | {inputs}")
 
     print("\n[4] QUALITY RESULTS PER ATTEMPT")
-    quality = decisions[decisions["stage"] == "quality_check"]
-    for rule in ["quality_gate","hard_check"]:
+    quality = decisions[decisions["agent"] == "quality_check"]
+    for rule in ["quality_gate", "hard_check"]:
         rows = quality[quality["rule"] == rule]
         for _, r in rows.iterrows():
             attempt = r.get("attempt", "?")
@@ -54,7 +62,7 @@ def audit(run_path: Path) -> None:
     print("\n[5] LLM STEP COUNTS")
     if "llm_step" in decisions["rule"].values:
         llm = decisions[decisions["rule"] == "llm_step"]
-        print(llm.groupby(["stage","outcome"]).size().to_string())
+        print(llm.groupby(["agent", "outcome"]).size().to_string())
     else:
         print("  No llm_step lines found.")
 
@@ -72,7 +80,7 @@ def audit(run_path: Path) -> None:
     if metrics_path.exists():
         metrics = pd.read_csv(metrics_path)
         if "arm" in metrics.columns and "fill_level" in metrics.columns:
-            combos = metrics[["arm","fill_level"]].drop_duplicates()
+            combos = metrics[["arm", "fill_level"]].drop_duplicates()
             print(f"  Arm/fill combos ({len(combos)}):")
             print(combos.to_string(index=False))
             print(f"  Total fits: {len(metrics)}")
@@ -82,8 +90,8 @@ def audit(run_path: Path) -> None:
         print("  models/metrics.csv not found")
 
     print("\n[8] SANITY")
-    for split_name in ["train","val","validation","test"]:
-        for arm in ["baseline","raw"]:
+    for split_name in ["train", "val", "validation", "test"]:
+        for arm in ["baseline", "raw"]:
             p = run_path / "preprocessing" / f"{arm}_{split_name}.csv"
             if p.exists():
                 full = pd.read_csv(p)

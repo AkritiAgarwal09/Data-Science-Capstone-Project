@@ -1,9 +1,10 @@
 """Verify the 3year-only Polish split produces 297/99/99 minority rows."""
+
 from pathlib import Path
-import pandas as pd
-from agentic_gan.utils.datasets import DATASETS
-from agentic_gan.tools.preprocessing import load_dataset, normalize
+
 from agentic_gan.orchestrator.split import split_dataset
+from agentic_gan.tools.preprocessing import load_dataset, normalize
+from agentic_gan.utils.datasets import DATASETS
 
 config = DATASETS["polish"]
 raw = load_dataset(config, Path(config.file))
