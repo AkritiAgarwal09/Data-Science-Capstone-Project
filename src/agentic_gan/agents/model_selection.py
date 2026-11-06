@@ -181,6 +181,13 @@ def run_model_selection(
     model_frame = train.drop(columns=["source_row"], errors="ignore")
     if described.dataset == "polish" and not described.horizons_pooled:
         model_frame = model_frame.drop(columns=[HORIZON_LABEL], errors="ignore")
+    constants: dict[str, object] = {}
+    if (
+        described.dataset == "polish"
+        and not described.horizons_pooled
+        and HORIZON_LABEL in train.columns
+    ):
+        constants = {HORIZON_LABEL: train[HORIZON_LABEL].iloc[0]}
     result = select_generator(described, min_rows=request.config.min_rows)
     _log_steps(result, request.attempt, run)
     if request.attempt == 1:
@@ -218,7 +225,7 @@ def run_model_selection(
 
     if request.attempt >= 2:
         settings = _propose_retry(settings, request, run, client)
-    return _train_ctgan(request, run, model_frame, settings, result)
+    return _train_ctgan(request, run, model_frame, settings, result, constants=constants)
 
 
 def _horizons_pooled(dataset: str, train: pd.DataFrame) -> bool:
@@ -617,7 +624,8 @@ def _privacy_failed(failed: list[str]) -> bool:
 
 
 def _train_ctgan(
-    request, run, train: pd.DataFrame, settings: dict[str, int], result: SelectionResult
+    request, run, train: pd.DataFrame, settings: dict[str, int], result: SelectionResult,
+    *, constants: dict[str, object] | None = None,
 ):
     from agentic_gan.tools.ctgan import sample_synthetic, save_model, train_ctgan
 
@@ -658,6 +666,10 @@ def _train_ctgan(
             raise ValueError(
                 f"synthetic rows {len(sample)} do not match fill_rows {count} at {level}"
             )
+        if constants:
+            sample = sample.copy()
+            for name, value in constants.items():
+                sample[name] = value
         if IS_SYNTHETIC not in sample.columns:
             sample = sample.copy()
             sample[IS_SYNTHETIC] = 1

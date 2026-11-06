@@ -529,6 +529,67 @@ def test_pooled_polish_cohorts_do_not_train(tmp_path, gan):
     assert gan.trains == []
 
 
+def test_single_horizon_polish_synthetic_keeps_the_cohort_column(tmp_path, gan):
+    rows, positives = 2000, 600
+    frame = pd.DataFrame({
+        "source_row": range(rows),
+        "cohort": ["3year"] * rows,
+        "A1": range(rows),
+        "A2": range(rows),
+        "A37__missing": ([0] * (rows // 2)) + ([1] * (rows // 2)),
+        "bankrupt": _labels(rows, positives),
+    })
+    config = _config(
+        tmp_path,
+        dataset_name="polish",
+        target="bankrupt",
+        positive_class=1,
+        fill_levels=[0.25, 0.5],
+        gan_bounds={"epochs": (100, 600), "pac": (5, 10),
+                    "discriminator_steps": (1, 3), "batch_size": (250, 500)},
+    )
+    request, run, _path = _request(tmp_path, config, frame, positives, rows - positives)
+    output = run_model_selection(request, run)
+    assert output.status is Status.SUCCESS, output.reason
+    assert output.generator == "ctgan"
+    expected_cols = (set(frame.columns) - {"source_row"}) | {"is_synthetic"}
+    for syn_set in output.synthetic_sets:
+        syn = pd.read_csv(syn_set.path)
+        assert set(syn.columns) == expected_cols, (
+            f"synthetic CSV missing columns: {expected_cols - set(syn.columns)}"
+        )
+        assert set(syn["cohort"].unique()) == {"3year"}
+
+
+def test_pooled_polish_does_not_add_cohort_to_synthetic(tmp_path, gan):
+    rows, positives = 2000, 600
+    frame = pd.DataFrame({
+        "cohort": ["1year", "3year"] * (rows // 2),
+        "A1": range(rows),
+        "A37__missing": ([0] * (rows // 2)) + ([1] * (rows // 2)),
+        "bankrupt": _labels(rows, positives),
+    })
+    config = _config(tmp_path, dataset_name="polish", target="bankrupt", positive_class=1)
+    request, run, _path = _request(tmp_path, config, frame, positives, rows - positives)
+    output = run_model_selection(request, run)
+    assert output.status is Status.SKIPPED
+    assert _logged(run, "horizon_gate") == "FAIL"
+    assert gan.trains == []
+
+
+def test_bank_synthetic_does_not_gain_a_cohort_column(tmp_path, gan):
+    frame = _bank_frame(rows=2000, positives=500)
+    config = _config(tmp_path, fill_levels=[0.5],
+                     gan_bounds={"epochs": (100, 600), "pac": (5, 10),
+                                 "discriminator_steps": (1, 3), "batch_size": (250, 500)})
+    request, run, _path = _request(tmp_path, config, frame, 500, 1500)
+    output = run_model_selection(request, run)
+    assert output.status is Status.SUCCESS
+    for syn_set in output.synthetic_sets:
+        syn = pd.read_csv(syn_set.path)
+        assert "cohort" not in syn.columns
+
+
 def test_retry_raises_epochs_inside_bounds_when_fidelity_fails(tmp_path, gan):
     frame = _bank_frame()
     config = _config(tmp_path, gan_bounds={"epochs": (100, 600)})
