@@ -2,3 +2,4 @@ dataset,seeds,model_fits,seconds
 bank_marketing,5,160,156.6
 default,5,160,116.5
 polish,5,160,238.2
+ieee_cis,1,32,1693.5
