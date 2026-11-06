@@ -1,0 +1,17 @@
+diff --git a/src/agentic_gan/utils/datasets.json b/src/agentic_gan/utils/datasets.json
+index 184389d..b9aa8d7 100644
+--- a/src/agentic_gan/utils/datasets.json
++++ b/src/agentic_gan/utils/datasets.json
+@@ -58,11 +58,7 @@
+     ],
+     "audit_file": null,
+     "cohorts": [
+-      "1year.arff",
+-      "2year.arff",
+-      "3year.arff",
+-      "4year.arff",
+-      "5year.arff"
++      "3year.arff"
+     ],
+     "split": {
+       "train": 0.6,
