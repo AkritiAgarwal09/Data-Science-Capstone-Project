@@ -1,10 +1,20 @@
 """The cross-dataset table built from runs' comparisons.csv files."""
 
+import sys
+
 import numpy as np
+import pandas as pd
 import pytest
 from test_evaluation import results
 
-from agentic_gan.tools.cross_dataset import COLUMNS, cross_dataset_table
+from agentic_gan.tools import cross_dataset
+from agentic_gan.tools.cross_dataset import (
+    COLUMNS,
+    comparisons_from_metrics,
+    cross_dataset_table,
+    plot_cross_dataset,
+    table_from_comparisons,
+)
 from agentic_gan.tools.evaluation import compare_arms
 
 
@@ -42,3 +52,40 @@ def test_one_row_per_dataset_arm_and_level_with_the_verdict(tmp_path):
     assert np.isclose(
         table.query("arm == 'original'").test_mean.iloc[0], np.mean([0.48, 0.50, 0.46, 0.49, 0.47])
     )
+
+
+def test_table_from_a_metrics_table_matches_the_run_folder_route(tmp_path):
+    metrics = results()
+    from_runs = cross_dataset_table([write_run(tmp_path, "bank", metrics)])
+    from_metrics = table_from_comparisons(comparisons_from_metrics(metrics))
+    assert list(from_metrics.columns) == COLUMNS
+    pd.testing.assert_frame_equal(from_metrics, from_runs)
+
+
+def test_a_one_seed_dataset_has_no_reliable_verdict():
+    metrics = results()
+    single = metrics[metrics.seed.eq(42)].assign(dataset="ieee_cis")
+    table = table_from_comparisons(comparisons_from_metrics(single))
+    verdicts = table[~table.arm.eq("cleaned")].verdict
+    assert verdicts.eq("not enough paired seeds").all()
+
+
+def test_the_chart_has_one_column_per_dataset_and_is_written(tmp_path):
+    metrics = pd.concat([results(), results().assign(dataset="polish")], ignore_index=True)
+    out = tmp_path / "charts" / "cross.png"
+    plot_cross_dataset(comparisons_from_metrics(metrics), out)
+    assert out.stat().st_size > 10_000
+
+
+def test_command_line_writes_the_table_and_the_chart(tmp_path):
+    metrics = tmp_path / "metrics.csv"
+    results().to_csv(metrics, index=False)
+    table, chart = tmp_path / "t.csv", tmp_path / "c.png"
+    argv = ["--metrics", str(metrics), "--out", str(table), "--plot", str(chart)]
+    old = sys.argv
+    sys.argv = ["cross_dataset", *argv]
+    try:
+        assert cross_dataset.main() == 0
+    finally:
+        sys.argv = old
+    assert list(pd.read_csv(table).columns) == COLUMNS and chart.exists()
