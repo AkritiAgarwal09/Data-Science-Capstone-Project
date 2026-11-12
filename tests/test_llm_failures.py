@@ -35,6 +35,7 @@ from agentic_gan.llm import VertexClient
 from agentic_gan.orchestrator import graph
 from agentic_gan.orchestrator.decisions import read_decisions
 from agentic_gan.schemas import Status, Verdict
+from agentic_gan.tools.ctgan_sampling import recipe_for
 
 
 def raise_timeout(request):
@@ -199,7 +200,11 @@ def test_model_selection_explanation_falls_back_and_keeps_the_rule(
     output = run_model_selection(request, run)
     assert output.status is Status.SUCCESS
     assert output.generator == "ctgan"
-    assert {name: output.hyperparameters[name] for name in CTGAN_DEFAULTS} == CTGAN_DEFAULTS
+    # the failed explanation changes nothing: attempt 1 keeps the dataset's recipe (Bank: V2)
+    recipe = recipe_for("bank_marketing")
+    assert {name: output.hyperparameters[name] for name in CTGAN_DEFAULTS} == {
+        name: getattr(recipe, name) for name in CTGAN_DEFAULTS
+    }
     steps = read_decisions(run).query("rule == 'llm_step'")
     assert steps.outcome.tolist() == ["LLM_FALLBACK"]
     assert set(steps.agent) == {"model_selection"}
