@@ -3,13 +3,31 @@
 from dataclasses import replace
 from pathlib import Path
 
+import pandas as pd
+import pytest
+from test_selection import _bank_frame, _Gan
+
 from agentic_gan.llm import FakeLLM
 from agentic_gan.orchestrator import graph as graph_module
 from agentic_gan.orchestrator.decisions import read_decisions
-from agentic_gan.orchestrator.graph import build_graph, config_for_dataset, run_pipeline
+from agentic_gan.orchestrator.graph import (
+    DEFAULT_GAN_BOUNDS,
+    build_graph,
+    config_for_dataset,
+    run_pipeline,
+)
 from agentic_gan.orchestrator.stubs import StubAgent, default_agents
-from agentic_gan.schemas import Arm, GeneratorOutput, RunConfig, Stage, Status
+from agentic_gan.schemas import (
+    Arm,
+    ArmFiles,
+    GeneratorOutput,
+    PreprocessOutput,
+    RunConfig,
+    Stage,
+    Status,
+)
 from agentic_gan.utils.datasets import DATASETS, load_configs
+from agentic_gan.utils.synthetic import IS_SYNTHETIC
 
 
 def config(tmp_path):
@@ -256,3 +274,120 @@ def test_narrative_falls_back_after_llm_failure(tmp_path):
     )
     assert state.is_complete
     assert read_decisions(run).query("rule == 'llm_step'").outcome.tolist() == ["LLM_FALLBACK"]
+
+
+# --- Issue #123 step 7: attempt 3 trains CTGAN; F3 on exhausted SKIPPED
+
+
+def _bank_preprocess(request, run):
+    """Write a Bank-sized baseline so the real selector can train CTGAN."""
+    frame = _bank_frame(rows=2000, positives=500)
+    table = frame.to_csv(index=False)
+    data = run.subdir("data")
+    paths = {}
+    for kind in ("raw", "baseline"):
+        for part in ("train", "val", "test"):
+            path = data / f"{kind}_{part}.csv"
+            path.write_text(table, encoding="utf-8")
+            paths[f"{kind}_{part}"] = path.resolve()
+    raw = ArmFiles(
+        train_path=paths["raw_train"],
+        val_path=paths["raw_val"],
+        test_path=paths["raw_test"],
+    )
+    baseline = ArmFiles(
+        train_path=paths["baseline_train"],
+        val_path=paths["baseline_val"],
+        test_path=paths["baseline_test"],
+    )
+    profile = run.subdir("profile") / "profile.json"
+    profile.write_text("{}\n", encoding="utf-8")
+    transformer = run.subdir("profile") / "transformer.txt"
+    transformer.write_text("stub\n", encoding="utf-8")
+    return PreprocessOutput(
+        status=Status.SUCCESS,
+        raw=raw,
+        baseline=baseline,
+        profile_path=profile.resolve(),
+        treatment_log_path=profile.resolve(),
+        transformer_path=transformer.resolve(),
+        transformer_fit_rows=len(frame),
+        baseline_train_positives=500,
+        baseline_train_negatives=1500,
+    )
+
+
+def _patch_ctgan(monkeypatch):
+    tool = _Gan()
+
+    def fake_sample_for_fill(model, train, positive_rows, counts, **kwargs):
+        wanted = max(counts.values() if hasattr(counts, "values") else counts)
+        frame = pd.DataFrame({name: [0] * wanted for name in train.columns})
+        frame[train.columns[-1] if "y" not in train.columns else "y"] = 1
+        frame[IS_SYNTHETIC] = 1
+        return frame
+
+    monkeypatch.setattr("agentic_gan.tools.ctgan.train_ctgan", tool.train)
+    monkeypatch.setattr("agentic_gan.tools.ctgan.save_model", tool.save)
+    monkeypatch.setattr(
+        "agentic_gan.agents.model_selection.sample_for_fill", fake_sample_for_fill
+    )
+    return tool
+
+
+def test_attempt_3_trains_and_quality_runs_again_without_state_error(tmp_path, monkeypatch):
+    # Finding F3 disproved on the normal path: attempt 3 trains CTGAN; quality runs a third time.
+    _patch_ctgan(monkeypatch)
+    agents = default_agents()
+    agents[Stage.PREPROCESSING] = _bank_preprocess
+    agents[Stage.QUALITY_CHECK] = StubAgent(
+        Stage.QUALITY_CHECK, failures=-1, failure_mode="quality"
+    )
+    run_config = config(tmp_path).model_copy(
+        update={"gan_bounds": dict(DEFAULT_GAN_BOUNDS), "min_rows": 2000}
+    )
+    state, run = run_pipeline(
+        run_config,
+        runs_dir=tmp_path / "runs",
+        agents=agents,
+        llm=FakeLLM([RuntimeError("offline")] * 20),
+    )
+    assert state.failed_stage is None
+    assert state.is_complete
+    assert state.attempts(Stage.MODEL_SELECTION) == 3
+    assert state.attempts(Stage.QUALITY_CHECK) == 3
+    assert state.gan_available is False
+    decisions = read_decisions(run)
+    assert "StateError" not in " ".join(decisions.rationale.astype(str))
+    assert decisions.query("rule == 'fallback'").empty
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "F3: attempt-3 SKIPPED after quality already ran tries "
+        "RunState.skip(QUALITY_CHECK) and raises StateError; "
+        "do not edit graph.py — team lead decides"
+    ),
+)
+def test_exhausted_attempt_3_skipped_hits_f3_state_error_in_graph(tmp_path, monkeypatch):
+    # Exhausted ladder → selector SKIPPED with wgan_gp; graph then errors (F3).
+    _patch_ctgan(monkeypatch)
+    agents = default_agents()
+    agents[Stage.PREPROCESSING] = _bank_preprocess
+    agents[Stage.QUALITY_CHECK] = StubAgent(
+        Stage.QUALITY_CHECK, failures=-1, failure_mode="quality"
+    )
+    # Empty gan_bounds: retries exhaust the ladder; attempt 3 returns SKIPPED.
+    run_config = config(tmp_path).model_copy(update={"gan_bounds": {}, "min_rows": 2000})
+    state, run = run_pipeline(
+        run_config,
+        runs_dir=tmp_path / "runs",
+        agents=agents,
+        llm=FakeLLM([RuntimeError("offline")] * 20),
+    )
+    # If F3 is fixed, this should complete without a failed stage after documenting SKIPPED.
+    assert state.failed_stage is None
+    assert state.is_complete
+    assert state.status(Stage.MODEL_SELECTION) is Status.SKIPPED
+    assert "wgan_gp" in (state.gan_unavailable_reason or "")
