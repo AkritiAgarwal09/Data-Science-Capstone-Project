@@ -59,6 +59,15 @@ class PipelineState(TypedDict, total=False):
     locked_config_yaml: str
 
 
+# Inclusive ranges every dataset retry may move. Copied per config so runs do not share a dict.
+DEFAULT_GAN_BOUNDS = {
+    "epochs": (300, 600),
+    "pac": (5, 10),
+    "discriminator_steps": (1, 5),
+    "batch_size": (250, 1000),
+}
+
+
 def config_for_dataset(dataset: str) -> RunConfig:
     if dataset not in DATASETS:
         raise ValueError(f"unknown dataset {dataset!r}; choose from {', '.join(DATASETS)}")
@@ -68,8 +77,7 @@ def config_for_dataset(dataset: str) -> RunConfig:
         dataset_path=Path(source.file).resolve(),
         target=source.target,
         positive_class="yes" if dataset == "bank_marketing" else 1,
-        gan_bounds={"epochs": (300, 600), "pac": (5, 10), "discriminator_steps": (1, 3)}
-        if dataset == "bank_marketing" else {},
+        gan_bounds=dict(DEFAULT_GAN_BOUNDS),
     )
 
 

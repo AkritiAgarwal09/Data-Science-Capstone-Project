@@ -222,7 +222,7 @@ def test_model_selection_retry_falls_back_to_the_rule_epochs(
     assert gan.trains[-1][1]["epochs"] == 400
     retry = _retry_lines(run)
     assert len(retry) == 1
-    assert retry.iloc[0].inputs["source"] == "rule"
+    assert retry.iloc[0].inputs["source"] == "ladder"
     steps = read_decisions(run).query("rule == 'llm_step'")
     assert steps.outcome.tolist() == ["LLM_FALLBACK"]
     assert set(steps.agent) == {"model_selection"}
