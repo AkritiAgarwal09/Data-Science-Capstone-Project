@@ -81,15 +81,33 @@ EXPLAIN_PROMPT = (
 )
 
 RETRY_PROMPT = (
-    "A CTGAN generator failed a synthetic-data quality gate. Propose the CTGAN settings for the "
-    "next attempt: epochs, pac, discriminator_steps and batch_size. Use only the failed checks, "
-    "the quality diagnosis and the current settings in the context. Every value must lie inside "
-    "the inclusive range given for that setting in `limits`; a setting whose range has equal low "
-    "and high cannot change, so return its current value. batch_size must be divisible by pac. If "
-    "`privacy_failed` is true the generator may be copying real rows, so do not raise epochs. "
-    "Explain in `reason` which failed checks or columns your changes target. You never change a "
-    "rule, threshold, range or the choice of generator."
+    "A CTGAN generator failed a synthetic-data quality gate. Propose the settings for the next "
+    "attempt as the RetrySettings fields only. "
+    "Knob guide: sampling_mode=\"unconditional\" fixed the technician skew in V2. rake_columns "
+    "reweights the output to the real shares of the named columns; use it for the worst "
+    "categorical columns. rule_filter drops rows that break dataset rules; use it when a rule:* "
+    "check fails. discriminator_steps and pac strengthen the critic; use them for detectability "
+    "and numeric drift (V2 used pac 5 and 3 steps). epochs gave marginal gains in our test, so "
+    "try other knobs first and never raise it after a privacy failure. batch_size must be "
+    "divisible by pac. "
+    "Hard constraints: every numeric value must lie inside its inclusive range in limits; "
+    "sampling_mode and rule_filter only from options; rake_columns only from "
+    "allowed_rake_columns; you never change a rule, threshold, range, option list or the "
+    "generator. "
+    "Instructions: change at least one knob; never return a combination listed in history; "
+    "answer only with the RetrySettings fields; reason must name the failed check or column "
+    "that the change targets. "
+    "Example (not data): job distance 0.335, all rule checks pass, so sampling_mode "
+    "\"unconditional\" and rake_columns [\"job\"], other knobs unchanged, reason "
+    "\"worst_column_distance on job is 0.335, a categorical skew, so unconditional sampling "
+    "and raking on job\"."
 )
+
+# Explicit marker on the ladder fallback reason (finding F4). Prefer startswith(LADDER_PREFIX)
+# over comparing free-text reasons: a real LLM answer could repeat the fallback string.
+LADDER_PREFIX = "Ladder default: "
+# Generators this agent can actually train. Until issue #124 lands, only CTGAN is here.
+IMPLEMENTED_GENERATORS = ("ctgan",)
 
 
 class SelectionExplanation(Schema):
@@ -370,8 +388,6 @@ def run_model_selection(
 
     if result.status == "skipped" or not result.trainable:
         return _skipped(result)
-    if request.attempt >= 3:
-        return _fallback_attempt(result, request.attempt, run)
 
     positives = request.preprocess.baseline_train_positives
     negatives = request.preprocess.baseline_train_negatives
@@ -385,6 +401,14 @@ def run_model_selection(
         )
         return GeneratorOutput(status=Status.SKIPPED, reason=reason, rationale=reason)
 
+    dataset = request.config.dataset_name
+    target = request.config.target
+    discrete = [name for name in _discrete_columns(model_frame, target, dataset) if name != target]
+    recipe = recipe_for(dataset)
+    allowed_rake = allowed_rake_columns(
+        discrete, recipe.rake_columns, list(model_frame.columns)
+    )
+
     settings = _clamp(CTGAN_DEFAULTS, request.config.gan_bounds)
     if settings is None:
         reason = "gan_bounds make batch_size not divisible by pac, so CTGAN is not trained."
@@ -396,7 +420,17 @@ def run_model_selection(
         return GeneratorOutput(status=Status.SKIPPED, reason=reason, rationale=reason)
 
     if request.attempt >= 2:
-        settings = _propose_retry(settings, request, run, client)
+        # Until issue #124 (WGAN-GP backup) lands, attempt 3 trains CTGAN with the next
+        # ladder rung (same path as attempt 2), not a SKIPPED fallback generator.
+        settings, exhausted = _propose_retry(
+            request,
+            run,
+            client,
+            discrete_columns=discrete,
+            allowed_rake=allowed_rake,
+        )
+        if request.attempt >= 3 and exhausted:
+            return _fallback_attempt(result, request.attempt, run, exhausted=True)
     return _train_ctgan(request, run, model_frame, settings, result)
 
 
@@ -547,8 +581,15 @@ def _skipped(result: SelectionResult) -> GeneratorOutput:
     )
 
 
-def _fallback_attempt(result: SelectionResult, attempt: int, run: RunDir) -> GeneratorOutput:
+def _fallback_attempt(
+    result: SelectionResult, attempt: int, run: RunDir, *, exhausted: bool
+) -> GeneratorOutput:
+    """SKIPPED only when the ladder is exhausted and no fallback generator is implemented."""
     fallback = result.fallback or "wgan_gp"
+    if not exhausted or fallback in IMPLEMENTED_GENERATORS:
+        raise RuntimeError(
+            "_fallback_attempt requires an exhausted ladder and an unimplemented fallback"
+        )
     reason = f"Attempt {attempt} uses fallback {fallback}, which is not implemented."
     log_decision(
         "model_selection", "fallback",
@@ -858,6 +899,40 @@ def _ladder_retry(
         proposed["batch_size"] = min(int(previous["batch_size"]) * 2, LADDER_BATCH_CAP)
         candidates.append((4, privacy_triggers[0], proposed))
 
+    # Diagnosis-derived candidates after matching table rows, before the catch-all.
+    diagnosis = (
+        request.previous_report.diagnosis
+        if request.previous_report is not None
+        else None
+    )
+    diag_rung = 6
+    if diagnosis is not None:
+        allowed = set(allowed_rake)
+        for adjustment in dict.fromkeys(diagnosis.adjustments):
+            proposed = _copy_seven(previous)
+            if adjustment == "change_sampling":
+                proposed["sampling_mode"] = (
+                    "unconditional"
+                    if previous["sampling_mode"] == "conditional"
+                    else "conditional"
+                )
+            elif adjustment == "rebalance_categories":
+                rake = list(previous["rake_columns"])
+                for col in diagnosis.columns:
+                    if col in allowed and col not in rake:
+                        rake.append(col)
+                proposed["rake_columns"] = rake
+            elif adjustment == "more_epochs":
+                if privacy_failed:
+                    continue
+                proposed["epochs"] = int(previous["epochs"]) + EPOCH_STEP
+            elif adjustment == "change_pac":
+                proposed["pac"] = 5
+            else:
+                continue
+            candidates.append((diag_rung, f"diagnosis:{adjustment}", proposed))
+            diag_rung += 1
+
     # Row 5: catch-all last resort (Q4).
     proposed = _copy_seven(previous)
     proposed["epochs"] = int(previous["epochs"]) + EPOCH_STEP
@@ -977,145 +1052,277 @@ def _failed_check_summaries(request: ModelSelectionInput) -> list[dict]:
     ]
 
 
-def _retry_settings_answer(
-    settings: dict, request: ModelSelectionInput, reason: str
-) -> RetrySettings:
-    """Build a RetrySettings from numeric settings, filling knobs from settings or the recipe."""
-    recipe = asdict(recipe_for(request.config.dataset_name))
+def _worst_columns(
+    request: ModelSelectionInput, discrete_columns: Sequence[str]
+) -> list[dict]:
+    """Up to three worst column_distance columns with kind categorical or numeric."""
+    _failed, distances = _report_ladder_signals(request.previous_report)
+    if not distances:
+        return []
+    discrete = set(discrete_columns)
+    ordered = sorted(distances, key=lambda col: (-distances[col], col))[:3]
+    return [
+        {
+            "column": col,
+            "distance": distances[col],
+            "kind": "categorical" if col in discrete else "numeric",
+        }
+        for col in ordered
+    ]
+
+
+def _retry_settings_answer(settings: dict, reason: str) -> RetrySettings:
+    """Build a RetrySettings from a seven-knob settings dict."""
     return RetrySettings(
         epochs=int(settings["epochs"]),
         pac=int(settings["pac"]),
         discriminator_steps=int(settings["discriminator_steps"]),
         batch_size=int(settings["batch_size"]),
-        sampling_mode=settings.get("sampling_mode", recipe["sampling_mode"]),
-        rule_filter=bool(settings.get("rule_filter", recipe["rule_filter"])),
-        rake_columns=list(settings.get("rake_columns", recipe["rake_columns"])),
+        sampling_mode=settings["sampling_mode"],
+        rule_filter=bool(settings["rule_filter"]),
+        rake_columns=list(settings["rake_columns"]),
         reason=reason,
     )
 
 
-def _propose_retry(
-    settings: dict[str, int], request: ModelSelectionInput, run: RunDir, client
-) -> dict[str, int]:
-    """Let the LLM propose settings inside gan_bounds; the rule retry is the fallback."""
-    rule_settings, _rule_name, rule_reason = _rule_retry(settings, request)
+def _diagnosis_suggestions(request: ModelSelectionInput, allowed_rake: Sequence[str]) -> dict:
+    """Map diagnosis adjustments to suggested knob moves for the LLM context only."""
+    report = request.previous_report
+    if report is None or report.diagnosis is None:
+        return {}
     failed = _failed_hard_checks(request)
     privacy = bool(set(failed) & PRIVACY_CHECKS)
-    recipe = recipe_for(request.config.dataset_name)
+    allowed = set(allowed_rake)
+    suggestions: dict = {}
+    for adjustment in dict.fromkeys(report.diagnosis.adjustments):
+        if adjustment == "change_sampling":
+            suggestions[adjustment] = "flip sampling_mode"
+        elif adjustment == "rebalance_categories":
+            suggestions[adjustment] = [
+                col for col in report.diagnosis.columns if col in allowed
+            ]
+        elif adjustment == "more_epochs" and not privacy:
+            suggestions[adjustment] = f"epochs +{EPOCH_STEP}"
+        elif adjustment == "change_pac":
+            suggestions[adjustment] = "pac toward 5"
+    return suggestions
+
+
+def _propose_retry(
+    request: ModelSelectionInput,
+    run: RunDir,
+    client,
+    *,
+    discrete_columns: list[str],
+    allowed_rake: list[str],
+) -> tuple[dict, bool]:
+    """Propose seven knobs via LLM inside limits; the ladder is the fallback and safety net.
+
+    Returns (applied_settings, exhausted). exhausted is True only when every ladder rung is used up.
+    """
+    history = attempt_history(request, run)
+    previous = _copy_seven(history[-1].settings)
+    ladder = _ladder_retry(previous, history, request, discrete_columns, allowed_rake)
+    failed = _failed_hard_checks(request)
+    privacy = bool(set(failed) & PRIVACY_CHECKS)
     limits = _retry_limits(
-        settings,
+        previous,
         request.config.gan_bounds,
         privacy,
-        rake_allowed=list(recipe.rake_columns),
+        rake_allowed=allowed_rake,
     )
-    applied, reason, source, proposed = rule_settings, rule_reason, "rule", None
-    _log_unsupported_adjustments(request, run)
-    # _retry_limits always returns RetryLimits (options are always movable). Until the ladder
-    # lands, keep the old gate: only call the LLM when at least one numeric setting can move.
-    numeric_open = any(low != high for low, high in limits.numeric.values())
-    if numeric_open:
-        fallback = _retry_settings_answer(
-            rule_settings, request, "Rule-based default: " + rule_reason
-        )
-        report = request.previous_report
-        diagnosis = report.diagnosis.model_dump() if report and report.diagnosis else None
-        context = json.dumps(
+    # limits is always RetryLimits (options always movable), so the LLM is called every retry.
+    assert limits is not None
+    applied = _copy_seven(ladder.settings)
+    reason = ladder.rationale
+    source = "ladder"
+    proposed = None
+    trigger = ladder.trigger
+    rung = ladder.rung
+    exhausted = ladder.exhausted
+
+    report = request.previous_report
+    diagnosis = report.diagnosis.model_dump() if report and report.diagnosis else None
+    fallback = _retry_settings_answer(ladder.settings, LADDER_PREFIX + ladder.rationale)
+    context = json.dumps(
+        {
+            "failed_hard_checks": _failed_check_summaries(request),
+            "worst_columns": _worst_columns(request, discrete_columns),
+            "diagnosis": diagnosis,
+            "current_settings": previous,
+            "limits": {name: list(edges) for name, edges in limits.numeric.items()},
+            "options": {name: list(values) for name, values in limits.options.items()},
+            "allowed_rake_columns": list(allowed_rake),
+            "history": [
+                {
+                    "attempt": record.attempt,
+                    "settings": record.settings,
+                    "failed_checks": list(record.failed_checks),
+                }
+                for record in history
+            ],
+            "privacy_failed": privacy,
+        },
+        default=str,
+    )
+    answer = run_llm_step(
+        Stage.MODEL_SELECTION.value,
+        RETRY_PROMPT,
+        context,
+        RetrySettings,
+        LLMStepOptions(
+            fallback=fallback,
+            numeric_bounds={name: limits.numeric[name] for name in SETTING_NAMES},
+            allowed_options={
+                "sampling_mode": RETRY_OPTIONS["sampling_mode"],
+                "rule_filter": RETRY_OPTIONS["rule_filter"],
+            },
+            expected_rule_hash=_rule_hash(request.config),
+            current_rule_hash=lambda: _rule_hash(run.load_config()),
+        ),
+        run,
+        client=client,
+    )
+    # F4: LADDER_PREFIX marks the deterministic fallback; do not compare free-text reasons.
+    from_llm = not answer.reason.startswith(LADDER_PREFIX)
+    if from_llm:
+        proposed = {
+            "epochs": answer.epochs,
+            "pac": answer.pac,
+            "discriminator_steps": answer.discriminator_steps,
+            "batch_size": answer.batch_size,
+            "sampling_mode": answer.sampling_mode,
+            "rule_filter": bool(answer.rule_filter),
+            "rake_columns": list(answer.rake_columns),
+        }
+        normalized = _normalize(answer, limits)
+        reject_reason = None
+        if normalized is None:
+            reject_reason = "could not be made a valid CTGAN setting"
+        else:
+            key = settings_key(normalized)
+            if key == settings_key(previous) or key in {
+                settings_key(record.settings) for record in history
+            }:
+                reject_reason = "repeats an earlier attempt"
+        if reject_reason is not None:
+            log_decision(
+                "model_selection",
+                "retry_rejected",
+                {
+                    "attempt": request.attempt,
+                    "proposed": proposed,
+                    "limits": {name: list(edges) for name, edges in limits.numeric.items()},
+                },
+                "REJECTED",
+                reject_reason,
+                run=run,
+            )
+            if reject_reason == "repeats an earlier attempt" and normalized is not None:
+                augmented = [
+                    *history,
+                    AttemptRecord(
+                        attempt=-1, settings=normalized, failed_checks=list(failed)
+                    ),
+                ]
+                ladder = _ladder_retry(
+                    previous, augmented, request, discrete_columns, allowed_rake
+                )
+                applied = _copy_seven(ladder.settings)
+                reason = ladder.rationale
+                source = "ladder"
+                trigger = ladder.trigger
+                rung = ladder.rung
+                exhausted = ladder.exhausted
+            else:
+                applied = _copy_seven(ladder.settings)
+                reason = ladder.rationale
+                source = "ladder"
+                trigger = ladder.trigger
+                rung = ladder.rung
+                exhausted = ladder.exhausted
+        else:
+            applied = _copy_seven(normalized)
+            reason = answer.reason
+            source = "llm"
+            trigger = ladder.trigger
+            rung = ladder.rung
+            exhausted = False
+            # Never keep an LLM answer that matches history (g).
+            if settings_key(applied) in {settings_key(record.settings) for record in history}:
+                augmented = [
+                    *history,
+                    AttemptRecord(attempt=-1, settings=applied, failed_checks=list(failed)),
+                ]
+                ladder = _ladder_retry(
+                    previous, augmented, request, discrete_columns, allowed_rake
+                )
+                applied = _copy_seven(ladder.settings)
+                reason = ladder.rationale
+                source = "ladder"
+                trigger = ladder.trigger
+                rung = ladder.rung
+                exhausted = ladder.exhausted
+
+    if exhausted:
+        log_decision(
+            "model_selection",
+            "retry_unchanged",
             {
                 "attempt": request.attempt,
-                "dataset": request.config.dataset_name,
-                "failed_hard_checks": _failed_check_summaries(request),
-                "diagnosis": diagnosis,
-                "current_settings": settings,
+                "source": source,
+                "trigger": trigger,
+                "previous_settings": previous,
+                "proposed": proposed,
+                "applied": applied,
                 "limits": {name: list(edges) for name, edges in limits.numeric.items()},
+                "options": {name: list(values) for name, values in limits.options.items()},
+                "failed_checks": failed,
                 "privacy_failed": privacy,
+                "rung": rung,
+                "previous_epochs": previous["epochs"],
+                "epochs": applied["epochs"],
+                "bound": _bounds_json(request.config.gan_bounds).get("epochs"),
             },
-            default=str,
+            "UNCHANGED",
+            reason if reason else "every rung is used up",
+            run=run,
         )
-        answer = run_llm_step(
-            Stage.MODEL_SELECTION.value,
-            RETRY_PROMPT,
-            context,
-            RetrySettings,
-            LLMStepOptions(
-                fallback=fallback,
-                numeric_bounds={name: limits.numeric[name] for name in SETTING_NAMES},
-                expected_rule_hash=_rule_hash(request.config),
-                current_rule_hash=lambda: _rule_hash(run.load_config()),
-            ),
-            run,
-            client=client,
-        )
-        if answer.reason != fallback.reason:
-            proposed = {name: getattr(answer, name) for name in SETTING_NAMES}
-            normalized = _normalize(answer, limits)
-            if normalized is None:
-                log_decision(
-                    "model_selection",
-                    "retry_rejected",
-                    {
-                        "attempt": request.attempt,
-                        "proposed": proposed,
-                        "limits": {
-                            name: list(edges) for name, edges in limits.numeric.items()
-                        },
-                    },
-                    "REJECTED",
-                    "could not be made a valid CTGAN setting",
-                    run=run,
-                )
-            else:
-                # Keep returning only the four numeric keys until Step 5 wires the knobs.
-                applied = {name: normalized[name] for name in SETTING_NAMES}
-                reason, source = answer.reason, "llm"
-    changed = any(applied[name] != settings[name] for name in SETTING_NAMES)
-    # Log None when every numeric is pinned (matches the pre-knob "nothing tunable" line).
-    logged_limits = (
-        {name: list(edges) for name, edges in limits.numeric.items()}
-        if numeric_open
-        else None
-    )
+        return applied, True
+
     log_decision(
         "model_selection",
-        "hyperparameter_retry" if changed else "retry_unchanged",
+        "hyperparameter_retry",
         {
             "attempt": request.attempt,
             "source": source,
-            "previous_settings": settings,
+            "trigger": trigger,
+            "previous_settings": previous,
             "proposed": proposed,
             "applied": applied,
-            "limits": logged_limits,
+            "limits": {name: list(edges) for name, edges in limits.numeric.items()},
+            "options": {name: list(values) for name, values in limits.options.items()},
             "failed_checks": failed,
             "privacy_failed": privacy,
-            # Kept for readers of the earlier one-setting log line.
-            "previous_epochs": settings["epochs"],
+            "rung": rung,
+            "previous_epochs": previous["epochs"],
             "epochs": applied["epochs"],
             "bound": _bounds_json(request.config.gan_bounds).get("epochs"),
         },
-        "ADJUSTED" if changed else "UNCHANGED",
+        "ADJUSTED",
         reason,
         run=run,
     )
-    return applied
+    return applied, False
 
 
-# Diagnosis adjustments with no CTGAN setting behind them. They are reported, never applied.
-UNSUPPORTED_ADJUSTMENTS = ("rebalance_categories", "change_sampling")
+# Formerly logged; diagnosis adjustments are now ladder/LLM suggestions (Step 5).
+UNSUPPORTED_ADJUSTMENTS = ()
 
 
 def _log_unsupported_adjustments(request: ModelSelectionInput, run: RunDir) -> None:
-    report = request.previous_report
-    if report is None or report.diagnosis is None:
-        return
-    for adjustment in dict.fromkeys(report.diagnosis.adjustments):
-        if adjustment in UNSUPPORTED_ADJUSTMENTS:
-            log_decision(
-                "model_selection",
-                "unsupported_adjustment",
-                {"attempt": request.attempt, "adjustment": adjustment},
-                "NOT_APPLIED",
-                "No CTGAN setting implements this adjustment, so it is reported only.",
-                run=run,
-            )
+    """No-op: unsupported_adjustment lines must never be written."""
+    return None
 
 
 def _matches(names: list[str], tokens: tuple[str, ...]) -> bool:

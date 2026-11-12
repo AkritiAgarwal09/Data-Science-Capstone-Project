@@ -15,6 +15,7 @@ import agentic_gan.orchestrator.graph as graph_module
 from agentic_gan.agents.model_selection import (
     CTGAN_DEFAULTS,
     SETTING_NAMES,
+    SEVEN_KNOBS,
     RetrySettings,
     SelectionExplanation,
     _retry_limits,
@@ -41,6 +42,7 @@ from agentic_gan.schemas import (
     Verdict,
     fill_rows,
 )
+from agentic_gan.tools.ctgan_sampling import recipe_for
 from agentic_gan.tools.quality_privacy import PRIVACY_CHECKS
 from agentic_gan.tools.selection import (
     DATASET_STRUCTURE,
@@ -662,15 +664,49 @@ def test_every_privacy_check_name_blocks_more_epochs(tmp_path, gan, check):
 
 
 def test_third_attempt_documents_wgan_and_does_not_train(tmp_path, gan):
+    # Empty gan_bounds → ladder exhausts; attempt 3 still documents wgan_gp and does not train.
     frame = _bank_frame()
     request, run, _path = _request(
         tmp_path, _config(tmp_path), frame, 500, 1500, attempt=3,
         previous=_fail_report("column_distance"),
     )
-    output = run_model_selection(request, run)
+    output = run_model_selection(request, run, client=FakeLLM([]))
     assert output.status is Status.SKIPPED
     assert output.generator == "wgan_gp"
     assert gan.trains == []
+    assert _logged(run, "fallback") == "SKIPPED"
+    assert _logged(run, "retry_unchanged") == "UNCHANGED"
+
+
+def test_attempt_3_trains_ctgan_with_a_new_ladder_rung(tmp_path, gan):
+    # Until #124, attempt 3 trains CTGAN; settings must differ from attempts 1 and 2.
+    from agentic_gan.orchestrator.decisions import log_decision
+
+    frame = _bank_frame()
+    config = _config(tmp_path, gan_bounds={"epochs": (100, 700), "batch_size": (250, 1000)})
+    first = {**BANK_PREVIOUS}
+    second = {**BANK_PREVIOUS, "epochs": 400}
+    request, run, _path = _request(
+        tmp_path, config, frame, 500, 1500, attempt=3,
+        previous=_fail_report("column_distance"), run_id="att3",
+    )
+    for attempt, settings in ((1, first), (2, second)):
+        log_decision(
+            "model_selection",
+            "hyperparameters",
+            {"attempt": attempt, **settings, "seed": 42, "generator": "ctgan"},
+            "SET",
+            "CTGAN settings are inside gan_bounds.",
+            run=run,
+        )
+    output = run_model_selection(request, run, client=FakeLLM([]))
+    assert output.status is Status.SUCCESS
+    assert gan.trains
+    trained = {name: gan.trains[-1][1][name] for name in SETTING_NAMES}
+    assert trained["epochs"] == 500  # ladder catch-all from attempt-2's 400
+    assert trained != {name: first[name] for name in SETTING_NAMES}
+    assert trained != {name: second[name] for name in SETTING_NAMES}
+    assert _logged(run, "hyperparameter_retry") == "ADJUSTED"
 
 
 def test_impossible_batch_bounds_do_not_train(tmp_path, gan):
@@ -911,14 +947,15 @@ def test_retry_limits_pin_a_setting_whose_bound_cannot_hold_it():
 
 # --- Retry proposer ------------------------------------------------------------------------------
 
+# Attempt-2 previous settings are the Bank recipe (F1), not CTGAN_DEFAULTS. Unbound knobs in
+# FakeLLM answers must match those pins or the runtime rejects them as out of bounds.
+BANK_PREVIOUS = {
+    name: getattr(recipe_for("bank_marketing"), name) for name in SEVEN_KNOBS
+}
+
 PROPOSAL = {
+    **BANK_PREVIOUS,
     "epochs": 500,
-    "pac": 10,
-    "discriminator_steps": 1,
-    "batch_size": 500,
-    "sampling_mode": "unconditional",
-    "rule_filter": True,
-    "rake_columns": ["job", "month", "poutcome", "marital", "day_of_month"],
     "reason": "more training",
 }
 
@@ -993,9 +1030,9 @@ def test_an_accepted_proposal_logs_one_retry_line_from_the_llm(tmp_path, gan):
     line = lines.iloc[0]
     assert line.rule == "hyperparameter_retry" and line.outcome == "ADJUSTED"
     assert line.inputs["source"] == "llm"
-    assert line.inputs["proposed"] == {k: PROPOSAL[k] for k in CTGAN_DEFAULTS}
-    assert line.inputs["applied"] == {**CTGAN_DEFAULTS, "epochs": 500}
-    assert line.inputs["previous_settings"] == CTGAN_DEFAULTS
+    assert line.inputs["proposed"] == {k: PROPOSAL[k] for k in SEVEN_KNOBS}
+    assert line.inputs["applied"] == {**BANK_PREVIOUS, "epochs": 500}
+    assert line.inputs["previous_settings"] == BANK_PREVIOUS
     assert line.inputs["limits"]["epochs"] == [100, 600]
     assert line.inputs["privacy_failed"] is False
     assert line.inputs["failed_checks"] == ["column_distance"]
@@ -1006,6 +1043,7 @@ def test_an_accepted_proposal_logs_one_retry_line_from_the_llm(tmp_path, gan):
 
 
 def test_a_fallback_logs_one_retry_line_from_the_rule(tmp_path, gan):
+    # Name kept; source is now the ladder (issue #123 step 5), not the old epochs+100 rule.
     bad = {**PROPOSAL, "epochs": 900}
     request, run, _path = _retry_request(tmp_path, {"epochs": (100, 600)}, "column_distance")
     fake = FakeLLM([bad, bad])
@@ -1016,27 +1054,33 @@ def test_a_fallback_logs_one_retry_line_from_the_rule(tmp_path, gan):
     assert len(lines) == 1
     line = lines.iloc[0]
     assert line.rule == "hyperparameter_retry" and line.outcome == "ADJUSTED"
-    assert line.inputs["source"] == "rule"
+    assert line.inputs["source"] == "ladder"
     assert line.inputs["proposed"] is None
-    assert line.inputs["applied"] == {**CTGAN_DEFAULTS, "epochs": 400}
-    assert "epochs move from 300 to 400" in line.rationale
+    assert line.inputs["applied"] == {**BANK_PREVIOUS, "epochs": 400}
+    assert "ladder rung" in line.rationale and "epochs=400" in line.rationale
 
 
 def test_the_no_llm_path_also_logs_exactly_one_retry_line(tmp_path, gan):
+    # Empty gan_bounds: LLM is still called (options movable); ladder exhausts because unbound
+    # numerics are pinned to previous — retry_unchanged only on exhaustion.
     fake = FakeLLM([])
     request, run, _path = _retry_request(tmp_path, {}, "column_distance")
     run_model_selection(request, run, client=fake)
-    assert fake.calls == []
+    assert len(fake.calls) == 2  # runtime retries once, then LLM_FALLBACK
+    assert _logged(run, "llm_step") == "LLM_FALLBACK"
     lines = _retry_lines(run)
     assert len(lines) == 1
     line = lines.iloc[0]
     assert line.rule == "retry_unchanged" and line.outcome == "UNCHANGED"
-    assert line.inputs["source"] == "rule"
-    assert line.inputs["limits"] is None
-    assert line.rationale == "retry has no legal adjustment"
+    assert line.inputs["source"] == "ladder"
+    assert line.inputs["limits"] == {
+        name: [BANK_PREVIOUS[name], BANK_PREVIOUS[name]] for name in SETTING_NAMES
+    }
+    assert line.rationale == "every rung is used up"
 
 
 def test_unsupported_adjustments_are_reported_once_and_not_applied(tmp_path, gan):
+    # Step 5: unsupported_adjustment lines are gone; diagnosis feeds ladder/LLM suggestions.
     diagnosis = QualityDiagnosis(
         failed_checks=["column_distance"],
         columns=["job"],
@@ -1053,24 +1097,16 @@ def test_unsupported_adjustments_are_reported_once_and_not_applied(tmp_path, gan
     assert len(fake.calls) == 1
     decisions = read_decisions(run)
     unsupported = decisions.query("rule == 'unsupported_adjustment'")
-    assert len(unsupported) == 1
-    assert unsupported.iloc[0].inputs["adjustment"] == "rebalance_categories"
-    assert unsupported.iloc[0].outcome == "NOT_APPLIED"
-    # It comes before the retry line, and more_epochs produced no such line.
-    assert unsupported.index[0] < _retry_lines(run).index[0]
+    assert len(unsupported) == 0
+    assert "rebalance_categories" in fake.calls[0][1]
     assert gan.trains[0][1]["epochs"] == 500
 
 
 # --- Retry proposer: full FakeLLM contract ------------------------------------------------------
 
 ANSWER = {
+    **BANK_PREVIOUS,
     "epochs": 400,
-    "pac": 10,
-    "discriminator_steps": 1,
-    "batch_size": 500,
-    "sampling_mode": "unconditional",
-    "rule_filter": True,
-    "rake_columns": ["job", "month", "poutcome", "marital", "day_of_month"],
     "reason": "more training",
 }
 
@@ -1109,7 +1145,7 @@ def test_a_proposal_inside_the_bounds_is_used_and_logged_from_the_llm(tmp_path, 
 
 
 def test_a_proposal_outside_the_bounds_is_rejected(tmp_path, gan):
-    # The issue's required out-of-bounds case: the runtime rejects it, the rule's 400 is used.
+    # Out-of-bounds → LLM_FALLBACK → ladder catch-all epochs +100 (was the old rule's 400).
     bad = _answer(epochs=900)
     fake = FakeLLM([bad, bad])
     request, run, _path = _retry_request(tmp_path, {"epochs": (100, 600)}, "column_distance")
@@ -1117,19 +1153,20 @@ def test_a_proposal_outside_the_bounds_is_rejected(tmp_path, gan):
     assert len(fake.calls) == 2
     assert _logged(run, "llm_step") == "LLM_FALLBACK"
     assert _trained(gan)["epochs"] == 400
-    assert _retry_lines(run).iloc[0].inputs["source"] == "rule"
+    assert _retry_lines(run).iloc[0].inputs["source"] == "ladder"
 
 
 def test_changing_an_unbounded_setting_is_rejected(tmp_path, gan):
-    moved_pac = _answer(pac=5)
+    # Bank previous pac is 5; moving to 10 is outside the pin and falls back to the ladder.
+    moved_pac = _answer(pac=10)
     fake = FakeLLM([moved_pac, moved_pac])
     request, run, _path = _retry_request(tmp_path, {"epochs": (100, 600)}, "column_distance")
     run_model_selection(request, run, client=fake)
     assert len(fake.calls) == 2
     assert _logged(run, "llm_step") == "LLM_FALLBACK"
-    assert _trained(gan)["pac"] == 10
+    assert _trained(gan)["pac"] == 5
     assert _trained(gan)["epochs"] == 400
-    assert _retry_lines(run).iloc[0].inputs["source"] == "rule"
+    assert _retry_lines(run).iloc[0].inputs["source"] == "ladder"
 
 
 def test_a_non_divisible_batch_snaps_down_when_the_multiple_is_in_range(tmp_path, gan):
@@ -1172,14 +1209,16 @@ def test_an_impossible_batch_snap_is_rejected_and_logged(tmp_path, gan):
     run_model_selection(request, run, client=fake)
     assert len(fake.calls) == 1
     assert _logged(run, "retry_rejected") == "REJECTED"
-    assert _trained(gan)["pac"] == 10
+    assert _trained(gan)["pac"] == 5
     assert _trained(gan)["batch_size"] == 500
     assert _trained(gan)["epochs"] == 400
-    assert _retry_lines(run).iloc[0].inputs["source"] == "rule"
+    assert _retry_lines(run).iloc[0].inputs["source"] == "ladder"
 
 
 @pytest.mark.parametrize("check", sorted(PRIVACY_CHECKS))
 def test_a_privacy_failure_rejects_raising_epochs(tmp_path, gan, check):
+    # Raising epochs is rejected; with batch_size unbound the privacy ladder rung cannot move
+    # either, so the ladder is exhausted → retry_unchanged from the ladder.
     raised = _answer(epochs=500)
     fake = FakeLLM([raised, raised])
     request, run, _path = _retry_request(
@@ -1189,7 +1228,9 @@ def test_a_privacy_failure_rejects_raising_epochs(tmp_path, gan, check):
     assert len(fake.calls) == 2
     assert _logged(run, "llm_step") == "LLM_FALLBACK"
     assert _trained(gan)["epochs"] == 300
-    assert _retry_lines(run).iloc[0].inputs["source"] == "rule"
+    line = _retry_lines(run).iloc[0]
+    assert line.rule == "retry_unchanged"
+    assert line.inputs["source"] == "ladder"
 
 
 @pytest.mark.parametrize("check", ["dcr_ratio", "exact_train_copies"])
@@ -1205,14 +1246,20 @@ def test_a_privacy_failure_accepts_lowering_epochs(tmp_path, gan, check):
 
 
 def test_empty_gan_bounds_make_no_llm_call_and_keep_the_defaults(tmp_path, gan):
+    # Step 5: empty bounds still call the LLM (options movable); ladder exhausts and settings
+    # stay at the Bank recipe previous (not CTGAN_DEFAULTS).
     fake = FakeLLM([])
     request, run, _path = _retry_request(tmp_path, {}, "column_distance")
     run_model_selection(request, run, client=fake)
-    assert len(fake.calls) == 0
-    assert {name: _trained(gan)[name] for name in CTGAN_DEFAULTS} == CTGAN_DEFAULTS
+    assert len(fake.calls) == 2
+    assert _logged(run, "llm_step") == "LLM_FALLBACK"
+    assert {name: _trained(gan)[name] for name in SETTING_NAMES} == {
+        name: BANK_PREVIOUS[name] for name in SETTING_NAMES
+    }
     line = _retry_lines(run).iloc[0]
     assert len(_retry_lines(run)) == 1
     assert line.rule == "retry_unchanged"
+    assert line.inputs["source"] == "ladder"
 
 
 def test_attempt_1_explains_and_attempt_2_proposes(tmp_path, gan):
@@ -1234,6 +1281,7 @@ def test_attempt_1_explains_and_attempt_2_proposes(tmp_path, gan):
 
 
 def test_change_sampling_is_the_unsupported_adjustment_that_gets_logged(tmp_path, gan):
+    # Step 5: change_sampling is a diagnosis suggestion / extra ladder rung, not a log line.
     diagnosis = QualityDiagnosis(
         failed_checks=["column_distance"],
         columns=["job"],
@@ -1247,8 +1295,9 @@ def test_change_sampling_is_the_unsupported_adjustment_that_gets_logged(tmp_path
     run_model_selection(request, run, client=fake)
     assert len(fake.calls) == 1
     unsupported = read_decisions(run).query("rule == 'unsupported_adjustment'")
-    assert len(unsupported) == 1
-    assert unsupported.iloc[0].inputs["adjustment"] == "change_sampling"
+    assert len(unsupported) == 0
+    assert "change_sampling" in fake.calls[0][1]
+    assert _trained(gan)["epochs"] == 500
 
 
 def test_attempt_2_writes_exactly_one_retry_line(tmp_path, gan):
@@ -1265,8 +1314,8 @@ def test_attempt_2_writes_exactly_one_retry_line(tmp_path, gan):
     unchanged, other, _path = _retry_request(tmp_path, {}, "column_distance", run_id="unchanged")
     fake_idle = FakeLLM([])
     run_model_selection(unchanged, other, client=fake_idle)
-    # Empty gan_bounds pin every setting, so the proposer is not called.
-    assert len(fake_idle.calls) == 0
+    # Empty gan_bounds: LLM still runs (then falls back); ladder exhausts → one retry_unchanged.
+    assert len(fake_idle.calls) == 2
     idle = _retry_lines(other)
     assert len(idle) == 1
     assert idle.iloc[0].rule == "retry_unchanged"
@@ -1421,13 +1470,16 @@ def test_the_proposer_context_is_grounded_in_the_diagnosis_and_has_no_rows(tmp_p
         assert name in context
     assert "AUC 0.86" in context
     payload = json.loads(context)
+    # Step 6 context keys (summaries only; no attempt/dataset/ladder extras).
     assert set(payload) == {
-        "attempt",
-        "dataset",
         "failed_hard_checks",
+        "worst_columns",
         "diagnosis",
         "current_settings",
         "limits",
+        "options",
+        "allowed_rake_columns",
+        "history",
         "privacy_failed",
     }
     failed_names = [item["name"] for item in payload["failed_hard_checks"]]

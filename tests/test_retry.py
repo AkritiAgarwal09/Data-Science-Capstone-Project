@@ -1,30 +1,39 @@
-"""Unit tests for issue #123 retry knobs, history, and ladder (steps 2–4)."""
+"""Unit tests for issue #123 retry knobs, history, ladder, prompt, and wiring (steps 2–8)."""
 
 from __future__ import annotations
 
 import copy
+import json
 import random
 from pathlib import Path
 
+import pandas as pd
 import pytest
 from pydantic import ValidationError
+from test_selection import _bank_frame, _ConfigEditingLLM, _request
 
 from agentic_gan.agents import model_selection as selection
 from agentic_gan.agents.model_selection import (
     CTGAN_DEFAULTS,
     RETRY_OPTIONS,
+    RETRY_PROMPT,
+    SEVEN_KNOBS,
     AttemptRecord,
     RetryLimits,
     RetrySettings,
     _ladder_retry,
     _normalize,
+    _propose_retry,
     _retry_limits,
     _rule_hash,
     allowed_rake_columns,
     attempt_history,
+    run_model_selection,
     settings_key,
 )
+from agentic_gan.llm import FakeLLM, RuleOverrideError
 from agentic_gan.orchestrator.decisions import log_decision, read_decisions
+from agentic_gan.orchestrator.graph import DEFAULT_GAN_BOUNDS, config_for_dataset
 from agentic_gan.orchestrator.manifest import create_run
 from agentic_gan.schemas import (
     ArmFiles,
@@ -32,6 +41,7 @@ from agentic_gan.schemas import (
     LevelReport,
     ModelSelectionInput,
     PreprocessOutput,
+    QualityDiagnosis,
     QualityReport,
     RunConfig,
     Status,
@@ -40,6 +50,9 @@ from agentic_gan.schemas import (
 from agentic_gan.tools.ctgan_sampling import recipe_for
 from agentic_gan.tools.quality_privacy import PRIVACY_CHECKS
 from agentic_gan.utils.datasets import DATASETS
+
+# Register the gan fixture from test_selection (same pattern as other agent suites).
+pytest_plugins = ["test_selection"]
 
 
 def _config(tmp_path, **overrides):
@@ -698,4 +711,604 @@ def test_ladder_purity_and_no_input_mutation(tmp_path):
     assert first == second
     assert previous == snap_previous
     assert history == snap_history
+
+
+# --- Step 6: RETRY_PROMPT and proposer context -------------------------------------------------
+
+CONTEXT_KEYS = {
+    "failed_hard_checks",
+    "worst_columns",
+    "diagnosis",
+    "current_settings",
+    "limits",
+    "options",
+    "allowed_rake_columns",
+    "history",
+    "privacy_failed",
+}
+
+
+def test_retry_prompt_has_knob_facts_example_and_under_400_words():
+    words = RETRY_PROMPT.split()
+    print(f"RETRY_PROMPT word count: {len(words)}")
+    assert len(words) < 400
+    for fact in (
+        "unconditional",
+        "rake_columns",
+        "rule_filter",
+        "discriminator_steps",
+        "marginal",
+        "divisible by pac",
+    ):
+        assert fact in RETRY_PROMPT
+    assert "Example (not data)" in RETRY_PROMPT
+    assert "0.335" in RETRY_PROMPT
+    assert "worst_column_distance on job is 0.335" in RETRY_PROMPT
+
+
+def _string_leaves(value):
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for item in value.values():
+            yield from _string_leaves(item)
+    elif isinstance(value, list | tuple):
+        for item in value:
+            yield from _string_leaves(item)
+
+
+def test_retry_context_keys_history_and_no_rows(tmp_path):
+    # Distinctive Bank-like cell values that must never appear in the context payload.
+    bank = pd.DataFrame(
+        {
+            "age": [42, 57],
+            "job": ["technician", "admin."],
+            "balance": [1362, -42],
+            "y": ["yes", "no"],
+            "source_row": [101, 202],
+        }
+    )
+    banned = {str(value) for column in bank.columns for value in bank[column].tolist()}
+
+    report = QualityReport(
+        status=Status.SUCCESS,
+        verdict=Verdict.FAIL,
+        levels=[
+            LevelReport(
+                fill_level=0.25,
+                passed=False,
+                checks=[
+                    CheckResult(
+                        name="worst_column_distance",
+                        value=0.335,
+                        threshold=0.25,
+                        passed=False,
+                        hard=True,
+                    ),
+                    CheckResult(
+                        name="column_distance:job",
+                        value=0.335,
+                        threshold=0.25,
+                        passed=False,
+                        hard=False,
+                    ),
+                    CheckResult(
+                        name="column_distance:month",
+                        value=0.21,
+                        threshold=0.25,
+                        passed=False,
+                        hard=False,
+                    ),
+                    CheckResult(
+                        name="column_distance:age",
+                        value=0.18,
+                        threshold=0.25,
+                        passed=False,
+                        hard=False,
+                    ),
+                ],
+            )
+        ],
+        report_path=Path("quality.json"),
+    )
+    config = _config(tmp_path, gan_bounds=dict(DEFAULT_BOUNDS))
+    request, run = _history_request(tmp_path, config, attempt=2, previous=report)
+    _log_hyperparameters(run, 1, BANK_V2)
+    _save_quality_report(run, 1, "worst_column_distance")
+
+    answer = {
+        **BANK_V2,
+        "epochs": 400,
+        "reason": "worst_column_distance on job",
+    }
+    fake = FakeLLM([answer])
+    _propose_retry(
+        request,
+        run,
+        fake,
+        discrete_columns=DISCRETE,
+        allowed_rake=ALLOWED_RAKE,
+    )
+    assert len(fake.calls) == 1
+    prompt, context, model = fake.calls[0]
+    assert prompt is RETRY_PROMPT or prompt == RETRY_PROMPT
+    assert model is RetrySettings
+    assert "source_row" not in context
+
+    payload = json.loads(context)
+    assert set(payload) == CONTEXT_KEYS
+    assert len(payload["history"]) == 1
+    assert payload["history"][0]["attempt"] == 1
+    assert payload["history"][0]["settings"]["pac"] == 5
+    assert payload["history"][0]["failed_checks"] == ["worst_column_distance"]
+    assert [item["column"] for item in payload["worst_columns"]] == ["job", "month", "age"]
+    assert payload["worst_columns"][0]["kind"] == "categorical"
+    assert payload["worst_columns"][2]["kind"] == "numeric"
+    assert payload["allowed_rake_columns"] == ALLOWED_RAKE
+    assert payload["options"] == {name: list(values) for name, values in RETRY_OPTIONS.items()}
+    assert payload["privacy_failed"] is False
+
+    for text in _string_leaves(payload):
+        assert text not in banned
+        assert "source_row" not in text
+
+
+def test_retry_fakellm_receives_prompt_and_context(tmp_path):
+    report = _ladder_report(
+        "column_distance:job",
+        soft_distances={"job": 0.3, "month": 0.2, "poutcome": 0.1},
+    )
+    request = _ladder_request(tmp_path, report)
+    run = create_run(request.config, run_id="prompt", runs_dir=tmp_path / "runs")
+    _log_hyperparameters(run, 1, BANK_V2)
+    fake = FakeLLM([{**BANK_V2, "epochs": 400, "reason": "more training"}])
+    _propose_retry(
+        request, run, fake, discrete_columns=DISCRETE, allowed_rake=ALLOWED_RAKE
+    )
+    assert len(fake.calls) == 1
+    prompt, context, model = fake.calls[0]
+    assert prompt == RETRY_PROMPT
+    assert isinstance(context, str)
+    assert json.loads(context)
+    assert model is RetrySettings
+
+
+# --- Step 8: wired retry behaviour (uses test_selection helpers + gan fixture) -----------------
+
+
+def _distance_fail_report(*hard_names, soft_distances=None, diagnosis=None):
+    checks = [
+        CheckResult(name=name, value=1.0, threshold=0.1, passed=False, hard=True)
+        for name in hard_names
+    ]
+    for col, distance in (soft_distances or {}).items():
+        checks.append(
+            CheckResult(
+                name=f"column_distance:{col}",
+                value=float(distance),
+                threshold=0.25,
+                passed=False,
+                hard=False,
+            )
+        )
+    return QualityReport(
+        status=Status.SUCCESS,
+        verdict=Verdict.FAIL,
+        levels=[LevelReport(fill_level=0.25, passed=False, checks=checks)],
+        report_path=Path("quality.json"),
+        diagnosis=diagnosis,
+    )
+
+
+def _bank_answer(previous: dict, **overrides):
+    fields = {**previous, "reason": "targeted retry"}
+    fields.update(overrides)
+    return fields
+
+
+def _trained_seven(gan):
+    trained = gan.trains[-1][1]
+    # train_ctgan kwargs are the four numerics; knobs come from the hyperparameters log.
+    return trained
+
+
+def _hyperparams_from_log(run, attempt):
+    rows = read_decisions(run).query("rule == 'hyperparameters'")
+    matched = [row for _, row in rows.iterrows() if row.inputs.get("attempt") == attempt]
+    assert matched, f"no hyperparameters log for attempt {attempt}"
+    return {name: matched[-1].inputs[name] for name in SEVEN_KNOBS}
+
+
+def test_bank_default_bounds_failing_column_distance_job_goes_unconditional_and_rakes_job(
+    tmp_path, gan
+):
+    config = config_for_dataset("bank_marketing")
+    assert config.gan_bounds == DEFAULT_GAN_BOUNDS
+    # Start attempt 1 as conditional with empty rake so row-1 of the ladder must move.
+    previous = {
+        **BANK_V2,
+        "sampling_mode": "conditional",
+        "rake_columns": [],
+    }
+    report = _distance_fail_report(
+        "worst_column_distance",
+        soft_distances={"job": 0.4, "month": 0.2, "poutcome": 0.1},
+    )
+    request, run, _path = _request(
+        tmp_path, config, _bank_frame(), 500, 1500, attempt=2, previous=report, run_id="a",
+    )
+    _log_hyperparameters(run, 1, previous)
+    fake = FakeLLM([])  # ladder only
+    output = run_model_selection(request, run, client=fake)
+    assert len(fake.calls) == 2
+    assert output.status is Status.SUCCESS
+    applied = _hyperparams_from_log(run, 2)
+    assert applied["sampling_mode"] == "unconditional"
+    assert "job" in applied["rake_columns"]
+    assert gan.trains[-1][1]["epochs"] == applied["epochs"]
+    retry = read_decisions(run).query("rule == 'hyperparameter_retry'")
+    assert len(retry) == 1
+    assert retry.iloc[0].inputs["source"] in {"llm", "ladder"}
+
+
+def test_llm_unavailable_still_changes_settings(tmp_path, gan):
+    config = _config(tmp_path, gan_bounds=dict(DEFAULT_GAN_BOUNDS))
+    previous = {**BANK_V2, "sampling_mode": "conditional", "rake_columns": []}
+    report = _distance_fail_report(
+        "worst_column_distance", soft_distances={"job": 0.35, "month": 0.2}
+    )
+    request, run, _path = _request(
+        tmp_path, config, _bank_frame(), 500, 1500, attempt=2, previous=report, run_id="b",
+    )
+    _log_hyperparameters(run, 1, previous)
+    fake = FakeLLM([RuntimeError("offline"), RuntimeError("offline")])
+    run_model_selection(request, run, client=fake)
+    assert len(fake.calls) == 2
+    assert _logged_outcome(run, "llm_step") == "LLM_FALLBACK"
+    retry = read_decisions(run).query("rule == 'hyperparameter_retry'")
+    assert len(retry) == 1
+    assert retry.iloc[0].inputs["source"] == "ladder"
+    applied = retry.iloc[0].inputs["applied"]
+    assert settings_key(applied) != settings_key(previous)
+    numeric = ("epochs", "pac", "batch_size", "discriminator_steps")
+    assert {name: gan.trains[-1][1][name] for name in numeric} == {
+        name: applied[name] for name in numeric
+    }
+
+
+def _logged_outcome(run, rule):
+    matched = read_decisions(run).query("rule == @rule")
+    assert len(matched) >= 1
+    return matched.outcome.iloc[-1]
+
+
+@pytest.mark.parametrize(
+    "bad_overrides",
+    [
+        {"epochs": 5000},
+        {"pac": 3},
+        {"rake_columns": ["not_a_real_column"]},
+    ],
+)
+def test_a_proposal_outside_the_limits_is_rejected_and_the_ladder_applies(
+    tmp_path, gan, bad_overrides
+):
+    config = _config(tmp_path, gan_bounds=dict(DEFAULT_GAN_BOUNDS))
+    previous = {**BANK_V2, "sampling_mode": "conditional", "rake_columns": []}
+    frame = _bank_frame()
+    report = _distance_fail_report(
+        "worst_column_distance", soft_distances={"job": 0.4, "month": 0.15}
+    )
+    request, run, _path = _request(
+        tmp_path, config, frame, 500, 1500, attempt=2, previous=report,
+        run_id=f"c-{next(iter(bad_overrides))}",
+    )
+    _log_hyperparameters(run, 1, previous)
+    discrete = [c for c in frame.columns if c not in {"y", "source_row", "age"}]
+    allowed = allowed_rake_columns(discrete, BANK_V2["rake_columns"], list(frame.columns))
+    history = attempt_history(request, run)
+    expected = _ladder_retry(previous, history, request, discrete, allowed)
+    bad = _bank_answer(previous, **bad_overrides)
+    fake = FakeLLM([bad, bad])
+    run_model_selection(request, run, client=fake)
+    assert len(fake.calls) >= 1
+    decisions = read_decisions(run)
+    if "rake_columns" in bad_overrides:
+        # Runtime lets rake through; _normalize rejects → retry_rejected.
+        assert "REJECTED" in decisions.query("rule == 'retry_rejected'").outcome.tolist()
+        assert len(fake.calls) == 1
+    else:
+        # Numeric OOB is rejected by the runtime → LLM_FALLBACK, then ladder.
+        assert _logged_outcome(run, "llm_step") == "LLM_FALLBACK"
+        assert len(fake.calls) == 2
+    retry = decisions.query("rule == 'hyperparameter_retry'")
+    assert len(retry) == 1
+    assert retry.iloc[0].inputs["source"] == "ladder"
+    assert settings_key(retry.iloc[0].inputs["applied"]) == settings_key(expected.settings)
+    assert gan.trains[-1][1]["epochs"] == expected.settings["epochs"]
+
+
+def test_a_proposal_equal_to_previous_settings_is_replaced_by_the_next_rung(tmp_path, gan):
+    # Attempt 3: LLM repeats attempt-2 settings → reject → second ladder candidate.
+    config = _config(tmp_path, gan_bounds=dict(DEFAULT_GAN_BOUNDS))
+    base = {**BANK_V2, "sampling_mode": "conditional", "rake_columns": [], "epochs": 300}
+    frame = _bank_frame(education=["tertiary"] * 2000)
+    report = _distance_fail_report(
+        "worst_column_distance",
+        "mean_column_distance",
+        soft_distances={"job": 0.4, "month": 0.2, "education": 0.15},
+    )
+    request, run, _path = _request(
+        tmp_path, config, frame, 500, 1500, attempt=3, previous=report, run_id="d",
+    )
+    discrete = [
+        name for name in frame.columns if name not in {"y", "source_row", "age"}
+    ]
+    allowed = allowed_rake_columns(discrete, BANK_V2["rake_columns"], list(frame.columns))
+    history1 = [AttemptRecord(1, base, [])]
+    first = _ladder_retry(base, history1, request, discrete, allowed)
+    history2 = [
+        AttemptRecord(1, base, []),
+        AttemptRecord(2, first.settings, ["worst_column_distance"]),
+    ]
+    # Next rung after attempt 2, as seen from previous=first.settings.
+    second = _ladder_retry(first.settings, history2, request, discrete, allowed)
+    assert settings_key(first.settings) != settings_key(base)
+    assert settings_key(second.settings) != settings_key(first.settings)
+
+    _log_hyperparameters(run, 1, base)
+    _log_hyperparameters(run, 2, first.settings)
+    # Repeat attempt-2 settings (previous).
+    fake = FakeLLM([_bank_answer(first.settings)])
+    output = run_model_selection(request, run, client=fake)
+    assert len(fake.calls) == 1
+    assert output.status is Status.SUCCESS
+    rejected = read_decisions(run).query("rule == 'retry_rejected'")
+    assert len(rejected) == 1
+    assert "repeats an earlier attempt" in rejected.iloc[0].rationale
+    applied = _hyperparams_from_log(run, 3)
+    assert settings_key(applied) == settings_key(second.settings)
+    assert settings_key(applied) != settings_key(first.settings)
+    assert gan.trains[-1][1]["epochs"] == second.settings["epochs"]
+
+
+def _safe_run_id(*parts: str) -> str:
+    """Run ids may not contain ':' (see RunState pattern)."""
+    return "-".join(part.replace(":", "-") for part in parts if part) or "run"
+
+
+@pytest.mark.parametrize("privacy", sorted(PRIVACY_CHECKS))
+@pytest.mark.parametrize(
+    "extras",
+    [
+        (),
+        ("column_distance:job",),
+        ("mean_column_distance",),
+        ("column_distance:job", "mean_column_distance"),
+    ],
+)
+def test_privacy_failure_never_raises_epochs(tmp_path, gan, privacy, extras):
+    config = _config(tmp_path, gan_bounds=dict(DEFAULT_GAN_BOUNDS))
+    previous = dict(BANK_V2)
+    hard = [privacy, *[name for name in extras if not name.startswith("column_distance:")]]
+    soft = {}
+    if "column_distance:job" in extras:
+        soft["job"] = 0.4
+    report = _distance_fail_report(*hard, soft_distances=soft or None)
+    # Also cover an LLM that tries to raise epochs.
+    request, run, _path = _request(
+        tmp_path,
+        config,
+        _bank_frame(),
+        500,
+        1500,
+        attempt=2,
+        previous=report,
+        run_id=_safe_run_id("e", privacy, *(extras or ("alone",))),
+    )
+    _log_hyperparameters(run, 1, previous)
+    raised = _bank_answer(previous, epochs=500, reason="ignore privacy")
+    fake = FakeLLM([raised, raised])
+    run_model_selection(request, run, client=fake)
+    assert len(fake.calls) == 2
+    trained_epochs = gan.trains[-1][1]["epochs"]
+    assert trained_epochs <= previous["epochs"]
+    applied = read_decisions(run).query(
+        "rule in ['hyperparameter_retry', 'retry_unchanged']"
+    ).iloc[-1].inputs["applied"]
+    assert applied["epochs"] <= previous["epochs"]
+
+
+def test_attempt_three_differs_from_attempts_one_and_two(tmp_path, gan):
+    config = _config(tmp_path, gan_bounds=dict(DEFAULT_GAN_BOUNDS))
+    frame = _bank_frame()
+    run = create_run(config, run_id="f-seq", runs_dir=tmp_path / "runs")
+    train_path = tmp_path / "f_train.csv"
+    frame.to_csv(train_path, index=False)
+    unread = tmp_path / "f_unread.csv"
+    unread.write_text("x\n")
+    profile = tmp_path / "f_profile.json"
+    profile.write_text("{}\n")
+    files = ArmFiles(
+        train_path=train_path.resolve(),
+        val_path=unread.resolve(),
+        test_path=unread.resolve(),
+    )
+    preprocess = PreprocessOutput(
+        status=Status.SUCCESS,
+        raw=files,
+        baseline=files,
+        profile_path=profile.resolve(),
+        treatment_log_path=profile.resolve(),
+        transformer_path=profile.resolve(),
+        transformer_fit_rows=len(frame),
+        baseline_train_positives=500,
+        baseline_train_negatives=1500,
+    )
+
+    def make_request(attempt, previous):
+        return ModelSelectionInput(
+            config=config, preprocess=preprocess, attempt=attempt, previous_report=previous
+        )
+
+    # Attempt 1.
+    out1 = run_model_selection(make_request(1, None), run, client=FakeLLM([
+        {"generator": "ctgan", "explanation": "Bank mixed table selects CTGAN by rule."}
+    ]))
+    assert out1.status is Status.SUCCESS
+    key1 = settings_key(_hyperparams_from_log(run, 1))
+
+    fail = _distance_fail_report(
+        "worst_column_distance", soft_distances={"job": 0.4, "month": 0.2}
+    )
+    # Attempt 2: ladder (LLM down).
+    fake2 = FakeLLM([])
+    out2 = run_model_selection(make_request(2, fail), run, client=fake2)
+    assert len(fake2.calls) == 2
+    assert out2.status is Status.SUCCESS
+    key2 = settings_key(_hyperparams_from_log(run, 2))
+
+    fail2 = _distance_fail_report(
+        "worst_column_distance",
+        "mean_column_distance",
+        soft_distances={"job": 0.4, "month": 0.2},
+    )
+    fake3 = FakeLLM([])
+    out3 = run_model_selection(make_request(3, fail2), run, client=fake3)
+    assert len(fake3.calls) == 2
+    assert out3.status is Status.SUCCESS
+    key3 = settings_key(_hyperparams_from_log(run, 3))
+
+    assert len({key1, key2, key3}) == 3
+    assert len(gan.trains) == 3
+
+
+def test_changing_gan_bounds_or_retry_options_changes_the_rule_hash(tmp_path, monkeypatch):
+    base = _config(tmp_path, gan_bounds=dict(DEFAULT_GAN_BOUNDS))
+    assert _rule_hash(base) == _rule_hash(
+        _config(tmp_path, gan_bounds=dict(DEFAULT_GAN_BOUNDS))
+    )
+    assert _rule_hash(base) != _rule_hash(
+        _config(tmp_path, gan_bounds={**DEFAULT_GAN_BOUNDS, "epochs": (300, 700)})
+    )
+    before = _rule_hash(base)
+    monkeypatch.setattr(
+        selection, "RETRY_OPTIONS", {**RETRY_OPTIONS, "sampling_mode": ("conditional",)}
+    )
+    assert _rule_hash(base) != before
+
+
+def test_editing_config_during_retry_raises_rule_override(tmp_path, gan):
+    config = _config(tmp_path, gan_bounds=dict(DEFAULT_GAN_BOUNDS), min_rows=2000)
+    previous = dict(BANK_V2)
+    report = _distance_fail_report(
+        "worst_column_distance", soft_distances={"job": 0.3}
+    )
+    request, run, _path = _request(
+        tmp_path, config, _bank_frame(), 500, 1500, attempt=2, previous=report, run_id="g",
+    )
+    _log_hyperparameters(run, 1, previous)
+    answer = _bank_answer(previous, epochs=400)
+    with pytest.raises(RuleOverrideError):
+        run_model_selection(request, run, client=_ConfigEditingLLM(run, answer))
+    assert "RULE_OVERRIDE_REJECTED" in read_decisions(run).outcome.tolist()
+    assert gan.trains == []
+
+
+def test_no_retry_unchanged_unless_every_rung_is_used_up(tmp_path, gan):
+    # Movable bounds: ladder must ADJUST, never retry_unchanged.
+    config = _config(tmp_path, gan_bounds=dict(DEFAULT_GAN_BOUNDS))
+    previous = {**BANK_V2, "sampling_mode": "conditional", "rake_columns": []}
+    report = _distance_fail_report(
+        "worst_column_distance", soft_distances={"job": 0.4}
+    )
+    request, run, _path = _request(
+        tmp_path, config, _bank_frame(), 500, 1500, attempt=2, previous=report, run_id="h",
+    )
+    _log_hyperparameters(run, 1, previous)
+    fake = FakeLLM([])
+    run_model_selection(request, run, client=fake)
+    assert len(fake.calls) == 2
+    decisions = read_decisions(run)
+    assert decisions.query("rule == 'retry_unchanged'").empty
+    assert len(decisions.query("rule == 'hyperparameter_retry'")) == 1
+    assert gan.trains[-1][1]["epochs"] >= previous["epochs"]
+
+    # Exhausted path (empty bounds, nothing movable): retry_unchanged only then.
+    request2, run2, _path = _request(
+        tmp_path, _config(tmp_path, gan_bounds={}), _bank_frame(), 500, 1500,
+        attempt=2, previous=report, run_id="h2",
+    )
+    _log_hyperparameters(run2, 1, dict(BANK_V2))
+    fake2 = FakeLLM([])
+    run_model_selection(request2, run2, client=fake2)
+    assert len(fake2.calls) == 2
+    unchanged = read_decisions(run2).query("rule == 'retry_unchanged'")
+    assert len(unchanged) == 1
+    assert "every rung is used up" in unchanged.iloc[0].rationale
+
+
+def test_no_unsupported_adjustment_is_ever_logged(tmp_path, gan):
+    diagnosis = QualityDiagnosis(
+        failed_checks=["column_distance:job"],
+        columns=["education"],
+        likely_cause="Category shares are off.",
+        adjustments=["change_sampling", "rebalance_categories"],
+    )
+    # Conditional + no education in rake so mapped knobs must both move.
+    previous = {
+        **BANK_V2,
+        "sampling_mode": "conditional",
+        "rake_columns": ["job", "month"],
+    }
+    # schema_match alone → no table-row match; diagnosis rungs / LLM apply the maps.
+    report = _distance_fail_report("schema_match", diagnosis=diagnosis)
+    config = _config(tmp_path, gan_bounds=dict(DEFAULT_GAN_BOUNDS))
+    frame = _bank_frame(education=["tertiary"] * 2000)
+    request, run, _path = _request(
+        tmp_path, config, frame, 500, 1500, attempt=2, previous=report, run_id="i",
+    )
+    _log_hyperparameters(run, 1, previous)
+    # One LLM answer applies both mapped knobs (ladder would only take one rung).
+    answer = _bank_answer(
+        previous,
+        sampling_mode="unconditional",
+        rake_columns=["job", "month", "education"],
+        reason="map diagnosis to knobs",
+    )
+    fake = FakeLLM([answer])
+    run_model_selection(request, run, client=fake)
+    assert len(fake.calls) == 1
+    decisions = read_decisions(run)
+    assert decisions.query("rule == 'unsupported_adjustment'").empty
+    applied = decisions.query("rule == 'hyperparameter_retry'").iloc[0].inputs["applied"]
+    assert applied["sampling_mode"] == "unconditional"
+    assert "education" in applied["rake_columns"]
+    assert gan.trains[-1][1]["pac"] == applied["pac"]
+
+
+def test_context_has_no_rows(tmp_path, gan):
+    frame = _bank_frame(rows=2000, positives=500)
+    banned = {str(value) for col in ("age", "job", "month") for value in frame[col].unique()[:5]}
+    banned.update({"source_row", str(frame.loc[0, "source_row"])})
+    config = _config(tmp_path, gan_bounds=dict(DEFAULT_GAN_BOUNDS))
+    previous = dict(BANK_V2)
+    report = _distance_fail_report(
+        "worst_column_distance", soft_distances={"job": 0.3, "month": 0.2}
+    )
+    request, run, _path = _request(
+        tmp_path, config, frame, 500, 1500, attempt=2, previous=report, run_id="j",
+    )
+    _log_hyperparameters(run, 1, previous)
+    answer = _bank_answer(previous, epochs=400)
+    fake = FakeLLM([answer])
+    run_model_selection(request, run, client=fake)
+    assert len(fake.calls) == 1
+    _prompt, context, _model = fake.calls[0]
+    assert "source_row" not in context
+    payload = json.loads(context)
+    assert set(payload) == CONTEXT_KEYS
+    for text in _string_leaves(payload):
+        assert text not in banned
+    assert gan.trains[-1][1]["epochs"] == 400
 
