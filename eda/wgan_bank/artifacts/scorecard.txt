@@ -1,0 +1,35 @@
+======================================================================
+WGAN-GP Bank Marketing Scorecard
+======================================================================
+check                            limit  real-vs-real  fill_10pct  fill_25pct  fill_50pct
+-------------------------------  -----  ------------  ----------  ----------  ----------
+mean_column_distance             0.050         0.023       0.049       0.043       0.042
+worst_column_distance            0.100         0.048     0.223 *     0.218 *     0.213 *
+spearman_diff                    0.045         0.020     0.074 *     0.076 *     0.076 *
+cramers_v_diff                   0.065         0.031       0.044       0.041       0.037
+rule:pdays_poutcome              0.005         0.000       0.000       0.000       0.000
+rule:previously_contacted_pdays  0.005         0.000       0.000       0.000       0.000
+rule:previous_pdays              0.005         0.000       0.000       0.000       0.000
+rule:pdays_range                 0.005         0.000       0.000       0.000       0.000
+label_balance                    0.010         0.000       0.000       0.000       0.000
+schema_match                     0.000         0.000       0.000       0.000       0.000
+worst column                                     job     balance     balance     balance
+rows                                            1058        2078        5195       10390
+verdict                                         PASS        FAIL        FAIL        FAIL
+
+* = above the limit (3,173 real training rows as the reference)
+
+--- Fill 10% (2078 rows) ---
+  real_vs_synthetic_auc: 0.8146  real_vs_real_auc: 0.5125
+  unique_ratio: 1.0000  exact_train_copies: 0
+  technician_share real=0.1535  synthetic=0.1362
+
+--- Fill 25% (5195 rows) ---
+  real_vs_synthetic_auc: 0.8272  real_vs_real_auc: 0.5125
+  unique_ratio: 1.0000  exact_train_copies: 0
+  technician_share real=0.1535  synthetic=0.1409
+
+--- Fill 50% (10390 rows) ---
+  real_vs_synthetic_auc: 0.8253  real_vs_real_auc: 0.5125
+  unique_ratio: 1.0000  exact_train_copies: 0
+  technician_share real=0.1535  synthetic=0.1445
