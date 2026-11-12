@@ -1,0 +1,65 @@
+variable,meaning,definition
+A1,Net return on assets,Net income ÷ total assets
+A2,Liabilities relative to assets,Total liabilities ÷ total assets
+A3,Working capital relative to assets,Working capital ÷ total assets
+A4,Current ratio,Current assets ÷ short-term liabilities
+A5,Defensive interval in days,365 × (cash + short-term securities + receivables − short-term liabilities) ÷ (operating expenses − depreciation)
+A6,Retained earnings relative to assets,Retained earnings ÷ total assets
+A7,Operating return on assets,Earnings before interest and taxes ÷ total assets
+A8,Book equity relative to liabilities,Book equity ÷ total liabilities
+A9,Asset turnover based on sales,Sales ÷ total assets
+A10,Equity relative to assets,Equity ÷ total assets
+A11,Adjusted gross profit relative to assets,(Gross profit + extraordinary items + finance costs) ÷ total assets
+A12,Gross profit relative to short-term liabilities,Gross profit ÷ short-term liabilities
+A13,Sales margin including depreciation,(Gross profit + depreciation) ÷ sales
+A14,Asset return including interest,(Gross profit + interest) ÷ total assets
+A15,Liability coverage in days,365 × total liabilities ÷ (gross profit + depreciation)
+A16,Profit plus depreciation relative to liabilities,(Gross profit + depreciation) ÷ total liabilities
+A17,Asset coverage of liabilities,Total assets ÷ total liabilities
+A18,Gross return on assets,Gross profit ÷ total assets
+A19,Gross profit margin,Gross profit ÷ sales
+A20,Inventory days based on sales,365 × inventory ÷ sales
+A21,Year-over-year sales ratio,Current-year sales ÷ prior-year sales
+A22,Operating profit relative to assets,Profit from operations ÷ total assets
+A23,Net profit margin,Net income ÷ sales
+A24,Three-year gross profit relative to assets,Gross profit over three years ÷ total assets
+A25,Equity above share capital relative to assets,(Equity − share capital) ÷ total assets
+A26,Net profit plus depreciation relative to liabilities,(Net income + depreciation) ÷ total liabilities
+A27,Operating profit relative to finance costs,Profit on operating activities / financial expenses
+A28,Working capital relative to fixed assets,Working capital ÷ fixed assets
+A29,Logarithmic asset size,Log of total assets
+A30,Liabilities net of cash relative to sales,(Total liabilities − cash) ÷ sales
+A31,Sales margin including interest,(Gross profit + interest) ÷ sales
+A32,Current liability days based on cost of products sold,365 × current liabilities ÷ cost of products sold
+A33,Operating expenses relative to short-term liabilities,Operating expenses ÷ short-term liabilities
+A34,Operating expenses relative to total liabilities,Operating expenses ÷ total liabilities
+A35,Profit on sales relative to assets,Profit from sales ÷ total assets
+A36,Asset turnover based on total sales,Total sales ÷ total assets
+A37,Current assets net of inventory relative to long-term liabilities,(Current assets − inventory) ÷ long-term liabilities
+A38,Constant capital relative to assets,Constant capital ÷ total assets
+A39,Profit on sales relative to sales,Profit from sales ÷ sales
+A40,Liquid current assets relative to short-term liabilities,(Current assets − inventory − receivables) ÷ short-term liabilities
+A41,Liabilities relative to a scaled operating profit measure,Total liabilities ÷ [(profit from operations + depreciation) × (12 ÷ 365)]
+A42,Operating profit margin,Profit from operations ÷ sales
+A43,Combined receivables and inventory turnover days,Receivables turnover in days + inventory turnover in days
+A44,Receivable days based on sales,365 × receivables ÷ sales
+A45,Net profit relative to inventory,Net income ÷ inventory
+A46,Quick ratio,(Current assets − inventory) ÷ short-term liabilities
+A47,Inventory days based on cost of products sold,365 × inventory ÷ cost of products sold
+A48,UCI EBITDA measure relative to assets,(Profit from operations − depreciation) ÷ total assets
+A49,UCI EBITDA measure relative to sales,(Profit from operations − depreciation) ÷ sales
+A50,Current assets relative to total liabilities,Current assets ÷ total liabilities
+A51,Short-term liabilities relative to assets,Short-term liabilities ÷ total assets
+A52,Short-term liability days based on cost of products sold,365 × short-term liabilities ÷ cost of products sold
+A53,Equity coverage of fixed assets,Equity ÷ fixed assets
+A54,Constant capital relative to fixed assets,Constant capital ÷ fixed assets
+A55,Working capital amount,Working capital
+A56,Sales margin after product costs,(Sales − cost of products sold) ÷ sales
+A57,Working capital net of inventory relative to adjusted sales,(Current assets − inventory − short-term liabilities) ÷ (sales − gross profit − depreciation)
+A58,Total costs relative to sales,Total costs ÷ total sales
+A59,Long-term liabilities relative to equity,Long-term liabilities ÷ equity
+A60,Inventory turnover based on sales,Sales ÷ inventory
+A61,Receivables turnover based on sales,Sales ÷ receivables
+A62,Short-term liability days based on sales,365 × short-term liabilities ÷ sales
+A63,Sales relative to short-term liabilities,Sales ÷ short-term liabilities
+A64,Fixed-asset turnover,Sales ÷ fixed assets
