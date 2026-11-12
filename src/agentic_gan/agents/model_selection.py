@@ -14,11 +14,12 @@ import pandas as pd
 from pydantic import Field, StrictBool
 
 from agentic_gan.llm import LLMStepOptions, run_llm_step
-from agentic_gan.orchestrator.decisions import log_decision
+from agentic_gan.orchestrator.decisions import log_decision, read_decisions
 from agentic_gan.orchestrator.manifest import RunDir
 from agentic_gan.schemas import (
     GeneratorOutput,
     ModelSelectionInput,
+    QualityReport,
     RunConfig,
     Schema,
     Stage,
@@ -51,6 +52,16 @@ CTGAN_DEFAULTS = {
 # The CTGAN settings a retry may move, each inside its gan_bounds range.
 SETTING_NAMES = ("epochs", "pac", "discriminator_steps", "batch_size")
 KNOB_NAMES = ("sampling_mode", "rule_filter", "rake_columns")
+# Order used in AttemptRecord.settings and settings_key.
+SEVEN_KNOBS = (
+    "epochs",
+    "batch_size",
+    "pac",
+    "discriminator_steps",
+    "sampling_mode",
+    "rule_filter",
+    "rake_columns",
+)
 RETRY_OPTIONS = {
     "sampling_mode": ("conditional", "unconditional"),
     "rule_filter": (False, True),
@@ -108,6 +119,111 @@ class RetryLimits:
     numeric: dict[str, tuple[int, int]]
     options: dict[str, tuple]
     rake_allowed: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class AttemptRecord:
+    """Settings and failed hard checks from one earlier model-selection attempt."""
+
+    attempt: int
+    settings: dict
+    failed_checks: list[str]
+
+
+def settings_key(settings: dict) -> tuple:
+    """Comparable key: ints as ints, rake_columns as a sorted tuple (order-insensitive)."""
+    return (
+        int(settings["epochs"]),
+        int(settings["batch_size"]),
+        int(settings["pac"]),
+        int(settings["discriminator_steps"]),
+        settings["sampling_mode"],
+        bool(settings["rule_filter"]),
+        tuple(sorted(settings["rake_columns"])),
+    )
+
+
+def _seven_knobs_from_inputs(inputs: dict) -> dict:
+    return {
+        "epochs": int(inputs["epochs"]),
+        "batch_size": int(inputs["batch_size"]),
+        "pac": int(inputs["pac"]),
+        "discriminator_steps": int(inputs["discriminator_steps"]),
+        "sampling_mode": inputs["sampling_mode"],
+        "rule_filter": bool(inputs["rule_filter"]),
+        "rake_columns": list(inputs["rake_columns"]),
+    }
+
+
+def _recipe_attempt_settings(config: RunConfig) -> dict:
+    """Attempt-1 settings when the hyperparameters log row is missing: recipe, clamped."""
+    recipe = asdict(recipe_for(config.dataset_name))
+    numeric = {name: int(recipe[name]) for name in SETTING_NAMES}
+    clamped = _clamp(numeric, config.gan_bounds)
+    if clamped is not None:
+        numeric = clamped
+    return {
+        "epochs": numeric["epochs"],
+        "batch_size": numeric["batch_size"],
+        "pac": numeric["pac"],
+        "discriminator_steps": numeric["discriminator_steps"],
+        "sampling_mode": recipe["sampling_mode"],
+        "rule_filter": bool(recipe["rule_filter"]),
+        "rake_columns": list(recipe["rake_columns"]),
+    }
+
+
+def _failed_checks_from_report(report: QualityReport | None) -> list[str]:
+    if report is None:
+        return []
+    return [
+        check.name
+        for level in report.levels
+        for check in level.checks
+        if check.hard and not check.passed
+    ]
+
+
+def _load_attempt_failed_checks(run: RunDir, attempt: int) -> list[str]:
+    path = run.subdir("quality") / f"quality_report_attempt_{attempt}.json"
+    if not path.exists():
+        return []
+    report = QualityReport.model_validate_json(path.read_text(encoding="utf-8"))
+    return _failed_checks_from_report(report)
+
+
+def attempt_history(request: ModelSelectionInput, run: RunDir) -> list[AttemptRecord]:
+    """Earlier attempts' seven knobs and failed hard checks. No writes, no logging, no mutation."""
+    decisions = read_decisions(run)
+    by_attempt: dict[int, dict] = {}
+    if not decisions.empty:
+        rows = decisions[
+            (decisions["agent"] == "model_selection") & (decisions["rule"] == "hyperparameters")
+        ]
+        for inputs in rows["inputs"]:
+            attempt = int(inputs["attempt"])
+            if attempt >= request.attempt:
+                continue
+            by_attempt[attempt] = _seven_knobs_from_inputs(inputs)
+
+    if request.attempt > 1 and 1 not in by_attempt:
+        by_attempt[1] = _recipe_attempt_settings(request.config)
+
+    records: list[AttemptRecord] = []
+    for attempt in sorted(by_attempt):
+        failed = _load_attempt_failed_checks(run, attempt)
+        if attempt == request.attempt - 1 and request.previous_report is not None:
+            from_request = _failed_checks_from_report(request.previous_report)
+            if from_request != failed:
+                failed = from_request
+        records.append(
+            AttemptRecord(
+                attempt=attempt,
+                settings=by_attempt[attempt],
+                failed_checks=failed,
+            )
+        )
+    return records
 
 
 def _rule_hash(config: RunConfig) -> str:
@@ -436,15 +552,7 @@ def _clamp(defaults: dict[str, int], bounds: dict) -> dict[str, int] | None:
 
 
 def _failed_hard_checks(request: ModelSelectionInput) -> list[str]:
-    report = request.previous_report
-    if report is None:
-        return []
-    return [
-        check.name
-        for level in report.levels
-        for check in level.checks
-        if check.hard and not check.passed
-    ]
+    return _failed_checks_from_report(request.previous_report)
 
 
 def _retry_limits(

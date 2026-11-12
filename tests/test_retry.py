@@ -1,6 +1,8 @@
-"""Pure unit tests for issue #123 retry knobs (step 2). No GAN, no run folder."""
+"""Unit tests for issue #123 retry knobs and attempt history (steps 2–3)."""
 
 from __future__ import annotations
+
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
@@ -15,8 +17,22 @@ from agentic_gan.agents.model_selection import (
     _retry_limits,
     _rule_hash,
     allowed_rake_columns,
+    attempt_history,
+    settings_key,
 )
-from agentic_gan.schemas import RunConfig
+from agentic_gan.orchestrator.decisions import log_decision, read_decisions
+from agentic_gan.orchestrator.manifest import create_run
+from agentic_gan.schemas import (
+    ArmFiles,
+    CheckResult,
+    LevelReport,
+    ModelSelectionInput,
+    PreprocessOutput,
+    QualityReport,
+    RunConfig,
+    Status,
+    Verdict,
+)
 from agentic_gan.tools.ctgan_sampling import recipe_for
 from agentic_gan.utils.datasets import DATASETS
 
@@ -180,3 +196,157 @@ def test_normalize_returns_none_when_no_legal_batch_multiple_exists():
         rake_allowed=("job",),
     )
     assert _normalize(_legal_answer(pac=8, batch_size=500, rake_columns=["job"]), limits) is None
+
+
+# --- Step 3: attempt history -------------------------------------------------------------------
+
+BANK_V2 = {
+    "epochs": 300,
+    "batch_size": 500,
+    "pac": 5,
+    "discriminator_steps": 3,
+    "sampling_mode": "unconditional",
+    "rule_filter": True,
+    "rake_columns": ["job", "month", "poutcome", "marital", "day_of_month"],
+}
+
+
+def _fail_report(*names):
+    checks = [
+        CheckResult(name=name, value=1.0, threshold=0.1, passed=False) for name in names
+    ]
+    return QualityReport(
+        status=Status.SUCCESS,
+        verdict=Verdict.FAIL,
+        levels=[LevelReport(fill_level=0.25, passed=False, checks=checks)],
+        report_path=Path("quality.json"),
+    )
+
+
+def _history_request(tmp_path, config, attempt, previous, run_id="hist"):
+    run = create_run(config, run_id=run_id, runs_dir=tmp_path / "runs")
+    train_path = tmp_path / f"{run_id}_train.csv"
+    train_path.write_text("y\n0\n")
+    unread = tmp_path / f"{run_id}_unread.csv"
+    unread.write_text("x\n")
+    profile = tmp_path / f"{run_id}_profile.json"
+    profile.write_text("{}\n")
+    files = ArmFiles(
+        train_path=train_path.resolve(),
+        val_path=unread.resolve(),
+        test_path=unread.resolve(),
+    )
+    preprocess = PreprocessOutput(
+        status=Status.SUCCESS,
+        raw=files,
+        baseline=files,
+        profile_path=profile.resolve(),
+        treatment_log_path=profile.resolve(),
+        transformer_path=profile.resolve(),
+        transformer_fit_rows=1,
+        baseline_train_positives=1,
+        baseline_train_negatives=1,
+    )
+    request = ModelSelectionInput(
+        config=config,
+        preprocess=preprocess,
+        attempt=attempt,
+        previous_report=previous,
+    )
+    return request, run
+
+
+def _log_hyperparameters(run, attempt, settings):
+    log_decision(
+        "model_selection",
+        "hyperparameters",
+        {"attempt": attempt, **settings, "seed": 42, "generator": "ctgan"},
+        "SET",
+        "CTGAN settings are inside gan_bounds.",
+        run=run,
+    )
+
+
+def _save_quality_report(run, attempt, *failed_names):
+    report = _fail_report(*failed_names)
+    path = run.subdir("quality") / f"quality_report_attempt_{attempt}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(report.model_dump_json(), encoding="utf-8")
+    return report
+
+
+def test_attempt_history_from_logged_rows_and_saved_report(tmp_path):
+    config = _config(tmp_path)
+    attempt2 = {**BANK_V2, "epochs": 400, "rake_columns": ["job", "month"]}
+    previous = _fail_report("column_distance:job")
+    request, run = _history_request(tmp_path, config, attempt=3, previous=previous)
+    _log_hyperparameters(run, 1, BANK_V2)
+    _log_hyperparameters(run, 2, attempt2)
+    _save_quality_report(run, 1, "column_distance:job")
+    before = len(read_decisions(run))
+    history = attempt_history(request, run)
+    assert len(read_decisions(run)) == before
+    assert [record.attempt for record in history] == [1, 2]
+    assert history[0].settings["pac"] == 5
+    assert history[0].settings["discriminator_steps"] == 3
+    assert history[0].failed_checks == ["column_distance:job"]
+    assert history[1].settings["epochs"] == 400
+    assert history[1].failed_checks == ["column_distance:job"]
+
+
+def test_attempt_history_missing_report_gives_empty_failed_checks(tmp_path):
+    config = _config(tmp_path)
+    previous = _fail_report("mean_column_distance")
+    request, run = _history_request(tmp_path, config, attempt=2, previous=previous)
+    _log_hyperparameters(run, 1, BANK_V2)
+    history = attempt_history(request, run)
+    assert len(history) == 1
+    # File missing for attempt 1, but previous_report wins for attempt == request.attempt - 1.
+    assert history[0].failed_checks == ["mean_column_distance"]
+
+
+def test_attempt_history_missing_report_without_previous_preference(tmp_path):
+    config = _config(tmp_path)
+    previous = _fail_report("column_distance:job")
+    request, run = _history_request(tmp_path, config, attempt=3, previous=previous)
+    _log_hyperparameters(run, 1, BANK_V2)
+    _log_hyperparameters(run, 2, {**BANK_V2, "epochs": 400})
+    # Only attempt 2 has a saved report; attempt 1 file is missing → [].
+    _save_quality_report(run, 2, "column_distance:job")
+    history = attempt_history(request, run)
+    assert history[0].failed_checks == []
+    assert history[1].failed_checks == ["column_distance:job"]
+
+
+def test_attempt_history_missing_attempt_1_falls_back_to_bank_recipe(tmp_path):
+    config = _config(tmp_path)
+    previous = _fail_report("column_distance")
+    request, run = _history_request(tmp_path, config, attempt=2, previous=previous)
+    # No hyperparameters row for attempt 1.
+    history = attempt_history(request, run)
+    assert len(history) == 1
+    assert history[0].attempt == 1
+    assert history[0].settings["pac"] == 5
+    assert history[0].settings["discriminator_steps"] == 3
+    assert history[0].settings["pac"] != CTGAN_DEFAULTS["pac"]
+    assert history[0].settings["discriminator_steps"] != CTGAN_DEFAULTS["discriminator_steps"]
+    assert history[0].settings["sampling_mode"] == "unconditional"
+    assert history[0].settings["rake_columns"] == BANK_V2["rake_columns"]
+
+
+def test_settings_key_ignores_rake_columns_order():
+    left = {**BANK_V2, "rake_columns": ["job", "month", "poutcome"]}
+    right = {**BANK_V2, "rake_columns": ["poutcome", "job", "month"]}
+    assert settings_key(left) == settings_key(right)
+
+
+def test_attempt_history_excludes_attempts_at_or_above_current(tmp_path):
+    config = _config(tmp_path)
+    previous = _fail_report("column_distance")
+    request, run = _history_request(tmp_path, config, attempt=2, previous=previous)
+    _log_hyperparameters(run, 1, BANK_V2)
+    _log_hyperparameters(run, 2, {**BANK_V2, "epochs": 400})
+    _log_hyperparameters(run, 3, {**BANK_V2, "epochs": 500})
+    history = attempt_history(request, run)
+    assert [record.attempt for record in history] == [1]
+    assert all(record.attempt < request.attempt for record in history)
