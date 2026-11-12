@@ -613,3 +613,82 @@ class TestSampleWGANGP:
             )
         assert len(out) < 50
         assert any("valid synthetic rows" in m for m in caplog.messages)
+
+
+# ===========================================================================
+# Step 4 tests: "learns something" sanity, failure modes, mutation kills
+# ===========================================================================
+
+@pytest.fixture(scope="module")
+def learnt_model():
+    """Trained 150 epochs on easy target distribution for sanity checks."""
+    rng = np.random.default_rng(42)
+    n = 600
+    df = pd.DataFrame({
+        "num1": rng.normal(5.0, 1.0, n),
+        "cat1": rng.choice(["A", "B"], n, p=[0.9, 0.1]),
+        "y": np.ones(n, dtype=int),
+    })
+    return _wgan().train_wgan_gp(df, "y", 1, ["cat1", "y"], epochs=150, batch_size=64, seed=0)
+
+
+class TestLearnsSomething:
+    """Verify the generator learns the data distribution, not just random noise.
+
+    Trained with 150 epochs on a table whose target distribution is easy to
+    capture: a Gaussian numeric column (mean=5) and a highly skewed categorical
+    column (90 / 10 split).  The thresholds are loose enough for reliability.
+    """
+
+    def test_numeric_mean_close_to_true(self, learnt_model):
+        wgan = _wgan()
+        out = wgan.sample_wgan_gp(learnt_model, 300, seed=0)
+        assert abs(out["num1"].mean() - 5.0) < 1.0, (
+            f"Generated mean {out['num1'].mean():.2f} too far from 5.0"
+        )
+
+    def test_majority_category_share_close_to_true(self, learnt_model):
+        wgan = _wgan()
+        out = wgan.sample_wgan_gp(learnt_model, 300, seed=0)
+        majority_share = (out["cat1"] == "A").mean()
+        assert abs(majority_share - 0.9) < 0.15, (
+            f"Majority category share {majority_share:.2f} too far from 0.9"
+        )
+
+
+class TestFailureModes:
+    def test_all_negative_raises(self, toy_df):
+        df = toy_df.copy()
+        df["y"] = 0
+        with pytest.raises(ValueError):
+            _wgan().train_wgan_gp(df, "y", 1, ["cat1", "y"], epochs=1)
+
+    def test_constant_numeric_column_does_not_crash(self):
+        """A constant numeric column is handled without crashing."""
+        rng = np.random.default_rng(1)
+        df = pd.DataFrame({
+            "constant": np.zeros(60),
+            "cat1": rng.choice(["a", "b"], 60),
+            "y": [1] * 40 + [0] * 20,
+        })
+        # Should not raise; we just assert it runs
+        _wgan().train_wgan_gp(df, "y", 1, ["cat1", "y"], epochs=1, batch_size=8)
+
+    def test_single_category_column_does_not_crash(self):
+        """A categorical column with only one unique value should not crash."""
+        rng = np.random.default_rng(2)
+        df = pd.DataFrame({
+            "num1": rng.normal(0, 1, 60).astype(float),
+            "cat1": ["only_value"] * 60,
+            "y": [1] * 40 + [0] * 20,
+        })
+        _wgan().train_wgan_gp(df, "y", 1, ["cat1", "y"], epochs=1, batch_size=8)
+
+    def test_batch_size_larger_than_n_rows(self):
+        """batch_size > positive rows should still train without error."""
+        rng = np.random.default_rng(3)
+        df = pd.DataFrame({
+            "num1": rng.normal(0, 1, 20).astype(float),
+            "y": [1] * 10 + [0] * 10,
+        })
+        _wgan().train_wgan_gp(df, "y", 1, [], epochs=1, batch_size=256)
