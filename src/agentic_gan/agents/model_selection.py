@@ -25,6 +25,8 @@ from agentic_gan.schemas import (
     SyntheticSet,
     fill_rows,
 )
+from agentic_gan.tools.ctgan_sampling import recipe_for, sample_for_fill
+from agentic_gan.tools.quality_fidelity import RULES
 from agentic_gan.tools.quality_privacy import PRIVACY_CHECKS
 from agentic_gan.tools.selection import (
     STEP_ORDER,
@@ -619,18 +621,30 @@ def _privacy_failed(failed: list[str]) -> bool:
 def _train_ctgan(
     request, run, train: pd.DataFrame, settings: dict[str, int], result: SelectionResult
 ):
-    from agentic_gan.tools.ctgan import sample_synthetic, save_model, train_ctgan
+    from agentic_gan.tools.ctgan import save_model, train_ctgan
 
+    dataset = request.config.dataset_name
     target = request.config.target
     positive = _positive_class(request.config.positive_class, train[target])
-    discrete = _discrete_columns(train, target, request.config.dataset_name)
+    discrete = _discrete_columns(train, target, dataset)
     folder = run.subdir("synthetic")
     attempt = request.attempt
     checkpoint = folder / f"ctgan_attempt_{attempt}.pkl"
     loss_path = folder / f"ctgan_loss_attempt_{attempt}.csv"
+    knobs = _generator_knobs(dataset, attempt, settings)
+    trainable = _clamp({name: knobs[name] for name in CTGAN_DEFAULTS}, request.config.gan_bounds)
+    if trainable is None:
+        reason = "gan_bounds make batch_size not divisible by pac, so CTGAN is not trained."
+        log_decision(
+            "model_selection", "hyperparameter_bounds",
+            {"attempt": attempt, "gan_bounds": _bounds_json(request.config.gan_bounds)},
+            "SKIPPED", reason, run=run,
+        )
+        return GeneratorOutput(status=Status.SKIPPED, reason=reason, rationale=reason)
+    knobs.update(trainable)
     log_decision(
         "model_selection", "hyperparameters",
-        {"attempt": attempt, **settings, "seed": request.config.split_seed, "generator": "ctgan"},
+        {"attempt": attempt, **knobs, "seed": request.config.split_seed, "generator": "ctgan"},
         "SET", "CTGAN settings are inside gan_bounds.", run=run,
     )
     model = train_ctgan(
@@ -639,28 +653,34 @@ def _train_ctgan(
         discrete_columns=discrete,
         log_path=loss_path,
         seed=request.config.split_seed,
-        **settings,
+        **trainable,
     )
     save_model(model, checkpoint)
-    sets = []
     positives = request.preprocess.baseline_train_positives
     negatives = request.preprocess.baseline_train_negatives
-    for level in request.config.fill_levels:
-        count = fill_rows(level, positives, negatives)
-        sample = sample_synthetic(
-            model,
-            count,
-            target_value=positive,
-            seed=request.config.split_seed,
-            drop_duplicates_of=train,
-        )
+    counts = [fill_rows(level, positives, negatives) for level in request.config.fill_levels]
+    # One draw covers every fill level; each level takes the first rows, so the sets are nested.
+    rows = sample_for_fill(
+        model,
+        train,
+        train[train[target].eq(positive)],
+        counts,
+        sampling_mode=knobs["sampling_mode"],
+        rule_filter=knobs["rule_filter"],
+        rake_columns=knobs["rake_columns"],
+        rules=RULES.get(dataset, ()),
+        seed=request.config.split_seed,
+    )
+    if IS_SYNTHETIC not in rows.columns:
+        rows = rows.copy()
+        rows[IS_SYNTHETIC] = 1
+    sets = []
+    for level, count in zip(request.config.fill_levels, counts, strict=True):
+        sample = rows.head(count)
         if len(sample) != count:
             raise ValueError(
                 f"synthetic rows {len(sample)} do not match fill_rows {count} at {level}"
             )
-        if IS_SYNTHETIC not in sample.columns:
-            sample = sample.copy()
-            sample[IS_SYNTHETIC] = 1
         path = folder / f"fill_{_level_token(level)}_attempt_{attempt}.csv"
         sample.to_csv(path, index=False)
         sets.append(SyntheticSet(fill_level=level, rows=count, path=path.resolve()))
@@ -668,11 +688,23 @@ def _train_ctgan(
         status=Status.SUCCESS,
         generator="ctgan",
         rationale=result.rationale,
-        hyperparameters={"attempt": attempt, **settings, "seed": request.config.split_seed},
+        hyperparameters={"attempt": attempt, **knobs, "seed": request.config.split_seed},
         checkpoint_path=checkpoint.resolve(),
         loss_history_path=loss_path.resolve(),
         synthetic_sets=sets,
     )
+
+
+def _generator_knobs(dataset: str, attempt: int, settings: dict) -> dict:
+    """The seven generator options of this attempt.
+
+    Attempt 1 is the dataset's recipe. A later attempt takes every option its settings carry
+    (a retry may move any of the seven) and keeps the recipe's value for the rest.
+    """
+    recipe = asdict(recipe_for(dataset))
+    if attempt == 1:
+        return recipe
+    return {name: settings.get(name, value) for name, value in recipe.items()}
 
 
 def _level_token(level: float) -> str:
