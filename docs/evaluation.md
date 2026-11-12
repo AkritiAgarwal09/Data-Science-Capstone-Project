@@ -15,6 +15,12 @@ against SMOTENC at matched fill levels. Selection comes from validation; the rep
 does not select a new model, threshold, or fill level from test results. An unavailable
 GAN arm is omitted from the comparisons. Missing arms are valid.
 
+The arm comparisons report PR-AUC, AUROC, F1, accuracy, precision and recall.
+The random baseline is 0.5 for AUROC and the observed positive rate of each split
+for PR-AUC. For accuracy it is the expected accuracy of random labels drawn at
+that split's positive rate. The report prints the rates and baselines alongside
+the scores, and number verification reads them from `comparisons.csv`.
+
 Segment metrics use source-row joins to the source dataset, with observed binary
 labels and real-row provenance checks. Available age, job, marital, education and
 Default demographic columns are evaluated. Numeric segment bands use evaluated
@@ -53,7 +59,7 @@ in the limitations section; they do not enter selected-model comparisons.
 All files are written under `report/` and returned for manifest registration:
 
 - `metrics.csv`: the training handoff's reported metrics, including selection/status.
-- `comparisons.csv`: means, seed spread and paired differences by reference arm.
+- `comparisons.csv`: means, seed spread, paired differences by reference arm, and split baselines.
 - `segments.csv`: per-model, per-seed segment metrics and small-group flags.
 - `evidence.json`: deterministic verdicts, test counts, rule constants and audit context.
 - `final_report.md`: verified narrative, comparison/verdict tables and caveats.
@@ -61,14 +67,31 @@ All files are written under `report/` and returned for manifest registration:
 The available #75 tools cover PR-AUC, F1, precision, recall, seed-based comparisons,
 segments and number checking. They do not supply SHAP analysis, calibration analysis
 or PDF export; the agent does not claim to have computed those. The reliable-gain rule
-uses paired mean lift versus seed-to-seed spread on both validation and test, with at
-least three paired seeds. This is descriptive evidence, not a confidence interval or
-significance test. Selected models may differ across arms.
+uses paired mean PR-AUC lift versus seed-to-seed spread on both validation and test,
+with at least three paired seeds. This is descriptive evidence, not a confidence interval
+or significance test. Selected models may differ across arms.
 
 Number verification establishes that numeric tokens occur in the result artifacts,
 with the tool's rounding/percentage conventions. It does not prove that every prose
 claim associates a valid number with the correct metric, nor validate causal or
 fairness interpretations; the fixed tables remain the authoritative evidence.
+
+## Bank Marketing deciles
+
+Export the selected cleaned model's deciles from a saved Bank training-agent run.
+Choose a seed explicitly for a run with more than one selected cleaned model.
+
+```bash
+uv run python -m agentic_gan.tools.bank_deciles runs/<run_id> --seed 42
+```
+
+The exporter reads the validation and test prediction CSVs and scores the
+cleaned training rows with the saved estimator and its frozen threshold. It
+writes three CSVs and three response-rate charts under `results/`, along with
+business takeaways and any held-out response-rate increases between deciles.
+Train results are in-sample. Equal scores are ordered by source-row ID.
+For runs with a fitted treatment plan, the estimator uses the saved raw split
+to clean the retained training rows with the same fitted encoder.
 
 ## Offline tests
 

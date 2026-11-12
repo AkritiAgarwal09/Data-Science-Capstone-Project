@@ -54,6 +54,29 @@ def test_verified_narrative_tools_and_registered_artifacts(experiment):
     tables = {p.stem: p for p in result.metrics_table_paths}
     comparison = pd.read_csv(tables["comparisons"])
     assert {"original", "cleaned", "smotenc"} <= set(comparison.reference)
+    assert {"roc_auc", "accuracy"} <= set(pd.read_csv(tables["metrics"]).columns)
+    winner = next(record for record in request.training.records if record.selected)
+    for split, path in (
+        ("validation", winner.val_predictions_path),
+        ("test", winner.test_predictions_path),
+    ):
+        rows = comparison[comparison.split.eq(split)]
+        rate = pd.read_csv(path).y_true.mean()
+        for metric, label, baseline in (
+            ("pr_auc", "PR-AUC", rate),
+            ("roc_auc", "AUROC", 0.5),
+            ("accuracy", "Accuracy", rate**2 + (1 - rate) ** 2),
+        ):
+            scored = rows[rows.metric.eq(metric)]
+            assert scored.random_baseline.tolist() == pytest.approx([baseline] * len(scored))
+            assert scored.positive_rate.tolist() == pytest.approx([rate] * len(scored))
+            mean = scored.iloc[0]["mean"]
+            assert f"| {split} | {label} | {mean:.6f} | {baseline:.6f} | {rate:.6f} |" in report
+    evidence = json.loads(tables["evidence"].read_text())
+    assert {verdict["metric"] for verdict in evidence["verdicts"]} == {"pr_auc"}
+    prompt, context, _ = fake.calls[0]
+    assert all(term in prompt for term in ("AUROC", "accuracy", "positive rate"))
+    assert "random_baseline" in json.loads(context)["comparisons"][0]
     segments = pd.read_csv(tables["segments"])
     assert not segments.empty and segments.small.any()
     assert run.load_manifest().register(run, Stage.EVALUATION, result).verify(run) == []
@@ -63,13 +86,13 @@ def test_made_up_number_rejected_then_regenerated_once(experiment):
     request, run = experiment
     fake = FakeLLM(
         [
-            answer(summary="There were 987654321 test observations."),
+            answer(summary="The AUROC random baseline was 0.987654321."),
             answer(summary="Only recorded evidence is reported."),
         ]
     )
     result = evaluation.run_evaluation(request, run, client=fake)
     assert result.status is Status.SUCCESS and len(fake.calls) == 2
-    assert "987654321" not in result.report_path.read_text()
+    assert "0.987654321" not in result.report_path.read_text()
     assert "Only recorded evidence" in result.report_path.read_text()
     decisions = read_decisions(run)
     assert "REJECTED" in decisions.outcome.tolist()
