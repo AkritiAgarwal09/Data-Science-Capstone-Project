@@ -224,7 +224,7 @@ def test_config_defaults():
         0.2,
         0.2,
     )
-    assert config.fill_levels == [0.10, 0.25, 0.50, 0.75, 1.00]
+    assert config.fill_levels == [0.10]
     assert config.max_attempts == 3
     assert len(config.seeds) == 5
 
@@ -461,8 +461,14 @@ def test_training_request_without_synthetic_data_means_no_gan_arm():
 
 
 def test_training_request_accepts_levels_from_the_grid():
-    request = make_request(accepted_synthetic=[synthetic(0.10), synthetic(0.50)])
+    config = make_config(fill_levels=[0.10, 0.25, 0.50])
+    request = make_request(config=config, accepted_synthetic=[synthetic(0.10), synthetic(0.50)])
     assert [s.fill_level for s in request.accepted_synthetic] == [0.10, 0.50]
+
+
+def test_training_request_accepts_the_default_level():
+    request = make_request(accepted_synthetic=[synthetic(0.10)])
+    assert [s.fill_level for s in request.accepted_synthetic] == [0.10]
 
 
 def test_training_request_rejects_a_level_outside_the_grid():

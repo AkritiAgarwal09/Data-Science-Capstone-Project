@@ -2,12 +2,16 @@
 
 The verdict is always decided by the checks. When it is FAIL, an LLM step explains the failure and
 suggests what to change; its answer is stored in the report and never changes the verdict.
+
+The fidelity and rule limits are calibrated per dataset from the real data (``margin`` times the
+real-vs-real values). The two augmentation-gain checks are reported but never decide the verdict.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from typing import get_args
 
 import pandas as pd
@@ -27,10 +31,22 @@ from agentic_gan.schemas import (
     Status,
     Verdict,
 )
-from agentic_gan.tools.quality_fidelity import RULES, fidelity_checks, schema_thresholds
+from agentic_gan.tools.quality_fidelity import (
+    RULES,
+    fidelity_checks,
+    real_vs_real,
+    schema_thresholds,
+    suggest_thresholds,
+)
 from agentic_gan.tools.quality_privacy import PRIVACY_CHECKS, quality_privacy_checks
 from agentic_gan.utils.datasets import DATASETS
 from agentic_gan.utils.files import write_text_atomic
+
+logger = logging.getLogger(__name__)
+
+# Below this many positive validation rows the real-vs-real baseline is too noisy to calibrate on.
+MIN_VALIDATION_POSITIVES = 20
+CALIBRATION_FILE = "calibrated_thresholds.json"
 
 DIAGNOSIS_PROMPT = (
     "You explain why synthetic tabular data failed a quality gate, for the person tuning the "
@@ -59,6 +75,61 @@ def _rules(request: QualityInput):
     if unknown:
         raise ValueError(f"Unknown sanity rules: {', '.join(sorted(unknown))}")
     return [available[name] for name in chosen]
+
+
+def _calibrate(config: RunConfig, run: RunDir, train, val, positive, rules, discrete) -> dict:
+    """The limits for this run's fidelity and rule checks, and where they came from.
+
+    Each limit is ``margin`` times the real-vs-real value of its check (``suggest_thresholds``):
+    about as close as two real samples are, with room for noise. It is computed once per run,
+    before any level is scored, and kept in quality/calibrated_thresholds.json so a retry is judged
+    by the same limits. The fixed numbers in ``QualityThresholds`` are the fallback when
+    calibration is off or the validation split has too few positive rows for a stable baseline.
+    """
+    gate = config.quality_gate
+    saved = run.subdir("quality") / CALIBRATION_FILE
+    if saved.exists():
+        return json.loads(saved.read_text(encoding="utf-8"))
+    positives = int(val[config.target].eq(positive).sum())
+    if not gate.calibrate or positives < MIN_VALIDATION_POSITIVES:
+        limits = schema_thresholds(gate, rules)
+        reason = "Calibration is off, so the fixed limits are used."
+        if gate.calibrate:
+            reason = (
+                f"Only {positives} positive validation rows; at least {MIN_VALIDATION_POSITIVES} "
+                "are needed for a stable baseline, so the fixed limits are used."
+            )
+            logger.warning(reason)
+        log_decision(
+            Stage.QUALITY_CHECK.value,
+            "thresholds_calibrated",
+            {"validation_positives": positives, "limits": limits},
+            "FIXED",
+            reason,
+            run=run,
+        )
+        return {"source": "fixed", "margin": None, "limits": limits}
+    baseline = real_vs_real(
+        train, val, target=config.target, positive=positive, discrete=discrete, rules=rules
+    )
+    limits = suggest_thresholds(baseline.values, margin=gate.margin)
+    calibration = {
+        "source": "calibrated",
+        "margin": gate.margin,
+        "validation_positives": positives,
+        "baseline": baseline.values,
+        "limits": limits,
+    }
+    write_text_atomic(saved, json.dumps(calibration, indent=2) + "\n")
+    log_decision(
+        Stage.QUALITY_CHECK.value,
+        "thresholds_calibrated",
+        {"margin": gate.margin, "baseline": baseline.values, "limits": limits},
+        "CALIBRATED",
+        f"Each limit is {gate.margin:g} times the real-vs-real value of its check",
+        run=run,
+    )
+    return calibration
 
 
 def _plot(path, fidelity, diagnostics, level: float) -> None:
@@ -131,7 +202,7 @@ def _default_diagnosis(results) -> QualityDiagnosis:
     )
 
 
-def _diagnosis_context(dataset: str, results) -> str:
+def _diagnosis_context(dataset: str, results, calibration) -> str:
     def brief(check):
         return {
             "name": check.name,
@@ -157,11 +228,20 @@ def _diagnosis_context(dataset: str, results) -> str:
             }
         )
     return json.dumps(
-        {"dataset": dataset, "levels": levels, "allowed_adjustments": get_args(Adjustment)}
+        {
+            "dataset": dataset,
+            "limits": {
+                "source": calibration["source"],
+                "margin": calibration["margin"],
+                "values": calibration["limits"],
+            },
+            "levels": levels,
+            "allowed_adjustments": get_args(Adjustment),
+        }
     )
 
 
-def _diagnose(request: QualityInput, run: RunDir, results, client) -> QualityDiagnosis:
+def _diagnose(request: QualityInput, run: RunDir, results, client, calibration) -> QualityDiagnosis:
     """Ask the LLM to explain a FAIL; keep its answer only if it matches the results."""
     fallback = _default_diagnosis(results)
     options = LLMStepOptions(
@@ -172,7 +252,7 @@ def _diagnose(request: QualityInput, run: RunDir, results, client) -> QualityDia
     answer = run_llm_step(
         Stage.QUALITY_CHECK.value,
         DIAGNOSIS_PROMPT,
-        _diagnosis_context(request.config.dataset_name, results),
+        _diagnosis_context(request.config.dataset_name, results, calibration),
         QualityDiagnosis,
         options,
         run,
@@ -210,7 +290,8 @@ def run_quality(request: QualityInput, run: RunDir, *, client=None) -> QualityRe
     positive = _positive_class(request, train)
     rules = _rules(request)
     discrete = DATASETS[config.dataset_name].discrete if config.dataset_name in DATASETS else ()
-    thresholds = schema_thresholds(config.quality_gate, rules)
+    calibration = _calibrate(config, run, train, val, positive, rules, discrete)
+    thresholds = calibration["limits"]
     reference = train.loc[train[target].eq(positive)]
     attempt = max(run.load_state().attempts(Stage.QUALITY_CHECK), 1)
     levels = []
@@ -299,7 +380,9 @@ def run_quality(request: QualityInput, run: RunDir, *, client=None) -> QualityRe
         run=run,
     )
     # Only a failure needs explaining: the diagnosis goes to model selection with the retry.
-    diagnosis = _diagnose(request, run, decisions, client) if verdict is Verdict.FAIL else None
+    diagnosis = (
+        _diagnose(request, run, decisions, client, calibration) if verdict is Verdict.FAIL else None
+    )
     report_path = run.subdir("quality") / f"quality_report_attempt_{attempt}.json"
     report = QualityReport(
         status=Status.SUCCESS,
