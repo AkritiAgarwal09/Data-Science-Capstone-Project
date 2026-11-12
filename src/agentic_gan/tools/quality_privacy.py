@@ -192,8 +192,14 @@ def utility_checks(
     target: str,
     positive_class: int | str,
     seed: int = 42,
+    hard: bool = False,
 ) -> tuple[list[CheckResult], dict[str, float]]:
-    """Compare real-only with real-plus-synthetic on the same real validation rows."""
+    """Compare real-only with real-plus-synthetic on the same real validation rows.
+
+    The two gains are always computed and reported. They decide the verdict only when ``hard`` is
+    set (``QualityThresholds.utility_gain_hard``): whether augmentation helps is judged by the
+    training and evaluation agents on real validation data, not by the gate.
+    """
     y_train = real_train[target].eq(positive_class).astype(int).to_numpy()
     y_val = real_val[target].eq(positive_class).astype(int).to_numpy()
     if len(np.unique(y_train)) != 2 or len(np.unique(y_val)) != 2:
@@ -223,12 +229,14 @@ def utility_checks(
             value=augmented_pr - real_pr,
             threshold=0,
             passed=augmented_pr >= real_pr,
+            hard=hard,
         ),
         CheckResult(
             name="augmentation_best_f1_gain",
             value=augmented_f1 - real_f1,
             threshold=0,
             passed=augmented_f1 >= real_f1,
+            hard=hard,
         ),
     ]
     return checks, {
@@ -262,7 +270,14 @@ def quality_privacy_checks(
         real_train, real_val, synthetic, columns, target, positive_class, seed
     )
     utility, utility_details = utility_checks(
-        real_train, real_val, synthetic, columns, target, positive_class, seed
+        real_train,
+        real_val,
+        synthetic,
+        columns,
+        target,
+        positive_class,
+        seed,
+        hard=thresholds.utility_gain_hard,
     )
     return [*exact, distance, discriminator, *utility], {
         **distance_details,

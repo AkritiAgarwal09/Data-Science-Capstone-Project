@@ -4,6 +4,7 @@ import json
 import os
 from functools import partial
 from pathlib import Path
+from types import SimpleNamespace
 
 import pandas as pd
 import pytest
@@ -376,6 +377,10 @@ def _bank_frame(rows=2000, positives=500, **extra):
         "source_row": range(rows),
         "age": range(rows),
         "job": ["admin"] * rows,
+        "month": ["may", "jun"] * (rows // 2) + ["may"] * (rows % 2),
+        "poutcome": ["unknown"] * rows,
+        "marital": ["married"] * rows,
+        "day_of_month": [(i % 28) + 1 for i in range(rows)],
         "y": _labels(rows, positives),
     })
     for name, values in extra.items():
@@ -387,19 +392,21 @@ class _Gan:
     def __init__(self):
         self.trains = []
         self.samples = []
+        self.sample_options = []
 
     def train(self, train_df, target_col, **kwargs):
         self.trains.append((train_df.copy(), kwargs))
         log_path = kwargs.get("log_path")
         if log_path is not None:
             Path(log_path).write_text("Generator Loss,Discriminator Loss\n0.1,0.2\n")
-        return object()
+        return SimpleNamespace(target_col=target_col)
 
     def save(self, model, path):
         Path(path).write_bytes(b"ctgan")
 
     def sample(self, model, n, target_value=1, seed=None, drop_duplicates_of=None, **kwargs):
         self.samples.append((n, target_value, list(drop_duplicates_of.columns)))
+        self.sample_options.append(kwargs)
         frame = pd.DataFrame({name: [0] * n for name in drop_duplicates_of.columns})
         frame[drop_duplicates_of.columns[-1]] = target_value
         return frame
@@ -450,8 +457,11 @@ def test_bank_attempt_trains_ctgan_on_the_training_split_only(tmp_path, monkeypa
     assert output.synthetic_sets
     expected = [fill_rows(level, 500, 1500) for level in request.config.fill_levels]
     assert [item.rows for item in output.synthetic_sets] == expected
-    assert [count for count, _value, _cols in gan.samples] == expected
+    # one draw serves every fill level, and Bank samples without conditioning (the V2 recipe)
+    assert len(gan.samples) == 1
     assert gan.samples[0][1] == 1
+    assert gan.sample_options[0]["conditional"] is False
+    assert gan.sample_options[0]["row_filter"] is not None
     trained_columns = list(gan.trains[0][0].columns)
     assert "source_row" not in trained_columns
     assert seen == [train_path]
@@ -475,7 +485,12 @@ def test_bank_retry_uses_v2_training_and_sampling_recipe(tmp_path, monkeypatch, 
         tmp_path, config, frame, 500, 1500, attempt=2,
         previous=_fail_report("worst_column_distance"),
     )
-    monkeypatch.setattr("agentic_gan.agents.model_selection.BANK_V2_POOL_ROWS", 500)
+    from agentic_gan.tools.ctgan_sampling import sample_for_fill
+
+    def sample_small_pool(*args, **kwargs):
+        return sample_for_fill(*args, **kwargs, pool_rows=500)
+
+    monkeypatch.setattr("agentic_gan.agents.model_selection.sample_for_fill", sample_small_pool)
     calls = []
 
     def sample(_model, n, **kwargs):
@@ -499,7 +514,62 @@ def test_bank_retry_uses_v2_training_and_sampling_recipe(tmp_path, monkeypatch, 
     assert calls[0][0] >= max(item.rows for item in output.synthetic_sets)
     fills = [pd.read_csv(item.path) for item in output.synthetic_sets]
     assert fills[0].equals(fills[-1].head(len(fills[0])))
-    assert _logged(run, "sampling_recipe") == "SET"
+    assert output.hyperparameters["sampling_mode"] == "unconditional"
+    assert output.hyperparameters["rule_filter"] is True
+
+
+BANK_V2_KNOBS = {
+    "epochs": 300,
+    "batch_size": 500,
+    "pac": 5,
+    "discriminator_steps": 3,
+    "sampling_mode": "unconditional",
+    "rule_filter": True,
+    "rake_columns": ["job", "month", "poutcome", "marital", "day_of_month"],
+}
+
+
+def test_first_bank_attempt_uses_the_v2_recipe_and_logs_all_seven_knobs(tmp_path, gan):
+    request, run, _path = _request(tmp_path, _config(tmp_path), _bank_frame(), 500, 1500)
+    output = run_model_selection(request, run)
+    trained = gan.trains[0][1]
+    for name in ("epochs", "batch_size", "pac", "discriminator_steps"):
+        assert trained[name] == BANK_V2_KNOBS[name]
+    assert {name: output.hyperparameters[name] for name in BANK_V2_KNOBS} == BANK_V2_KNOBS
+    logged = read_decisions(run).query("rule == 'hyperparameters'").inputs.iloc[-1]
+    assert {name: logged[name] for name in BANK_V2_KNOBS} == BANK_V2_KNOBS
+
+
+def test_fill_files_are_nested_prefixes_of_one_draw(tmp_path, gan):
+    request, run, _path = _request(tmp_path, _config(tmp_path), _bank_frame(), 500, 1500)
+    output = run_model_selection(request, run)
+    small, large = (pd.read_csv(item.path) for item in output.synthetic_sets)
+    assert len(small) < len(large)
+    pd.testing.assert_frame_equal(small, large.head(len(small)))
+
+
+def test_a_retry_keeps_the_recipe_for_options_its_settings_do_not_carry(tmp_path, gan):
+    config = _config(tmp_path, gan_bounds={"epochs": (100, 600)})
+    request, run, _path = _request(
+        tmp_path, config, _bank_frame(), 500, 1500, attempt=2,
+        previous=_fail_report("column_distance"),
+    )
+    output = run_model_selection(request, run)
+    assert output.hyperparameters["epochs"] == 400
+    for name in ("sampling_mode", "rule_filter", "rake_columns"):
+        assert output.hyperparameters[name] == BANK_V2_KNOBS[name]
+
+
+def test_knobs_other_than_bank_default_to_v1(tmp_path):
+    from agentic_gan.agents.model_selection import _generator_knobs
+
+    assert _generator_knobs("polish", 1, {}) == {
+        "epochs": 300, "batch_size": 500, "pac": 10, "discriminator_steps": 1,
+        "sampling_mode": "conditional", "rule_filter": False, "rake_columns": [],
+    }
+    moved = _generator_knobs("polish", 2, {"pac": 20, "sampling_mode": "unconditional"})
+    assert moved["pac"] == 20 and moved["sampling_mode"] == "unconditional"
+    assert moved["rule_filter"] is False
 
 
 def test_duration_does_not_train(tmp_path, gan):

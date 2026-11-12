@@ -97,7 +97,14 @@ class SplitRatios(Schema):
 
 
 class QualityThresholds(Schema):
-    """Starting values from architecture.md section 5.3, to be calibrated (issue #12)."""
+    """The quality gate's limits. The fixed numbers are the starting values from architecture.md
+    section 5.3.
+
+    With ``calibrate`` on, the quality agent replaces the fidelity and rule limits by ``margin``
+    times the dataset's own real-vs-real values (issue 101); the fixed numbers are then the
+    fallback. The two augmentation-gain checks are reported but decide nothing unless
+    ``utility_gain_hard`` is set. All of it is part of the rule hash, so an LLM cannot change it.
+    """
 
     mean_column_distance_max: float = Field(0.10, ge=0)
     column_distance_max: float = Field(0.25, ge=0)
@@ -106,6 +113,9 @@ class QualityThresholds(Schema):
     dcr_ratio_min: float = Field(1.0, ge=0)
     exact_duplicates_max: int = Field(0, ge=0)
     sanity_violations_max: int = Field(0, ge=0)
+    margin: float = Field(3.0, ge=1)
+    calibrate: bool = True
+    utility_gain_hard: bool = False
 
 
 class RunConfig(Schema):
@@ -120,9 +130,10 @@ class RunConfig(Schema):
     split_ratios: SplitRatios = Field(default_factory=SplitRatios)
     split_seed: int = 42
     seeds: list[int] = Field(default_factory=lambda: [42, 43, 44, 45, 46], min_length=1)
-    fill_levels: list[FillLevel] = Field(
-        default_factory=lambda: [0.10, 0.25, 0.50, 0.75, 1.00], min_length=1
-    )
+    # One fill level by default. In results/cross_dataset.csv (4 datasets, SMOTENC and CTGAN)
+    # 10% was the best of 10, 25 and 50% for 7 of 8 dataset and arm pairs, and the loss against
+    # the cleaned baseline grew with every step up. List several levels to sweep them.
+    fill_levels: list[FillLevel] = Field(default_factory=lambda: [0.10], min_length=1)
     quality_gate: QualityThresholds = Field(default_factory=QualityThresholds)
     sanity_rules: list[str] = Field(default_factory=list)
     max_attempts: int = Field(3, ge=1)

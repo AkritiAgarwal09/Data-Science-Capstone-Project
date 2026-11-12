@@ -213,7 +213,7 @@ flowchart LR
 ![The volume loop](volume_loop_diagram.png)
 
 1. Profile the training data and set the real-only baseline (Pre-processing Agent). The `baseline` arm is fill level 0.
-2. Choose the volumes and generate. The volumes are the fill levels in the config, set per dataset (default 0.10, 0.25, 0.50, 0.75 and 1.00). The Model Selection Agent generates one set per level.
+2. Choose the volumes and generate. The volumes are the fill levels in the config, set per dataset. The default is one level, 0.10: in the all-arms results (`results/cross_dataset.csv`) 10% was the best of 10, 25 and 50% for 7 of 8 dataset and arm pairs, and the loss against the cleaned baseline grew with each step up. List more levels to sweep them. The Model Selection Agent generates one set per level.
 3. Quality check each set. A level that passes goes on. If no level passes, reject the batch, revise the generator and retry within the budget (`max_attempts`). If the budget is exhausted, use real data only and add 0 rows.
 4. Test the accepted volumes on real validation data. The Training Agent fits `gan`, and `smote` as the comparison, at every accepted level and for every seed.
 5. Ask whether the gain is reliable. If it is, select the smallest volume near the best score. If not, use real data only and add 0 rows.
@@ -329,7 +329,7 @@ For the primary dataset, the rules choose CTGAN. `bank-full` has no customer ide
 
 **Tools.** `describe_data_characteristics`, `train_ctgan`, `train_timegan`, `train_fallback_gan`, `sample_synthetic`.
 
-**Decision logic.** The generator is chosen by the rules above (`select_generator` in `tools/selection.py`). That choice stays code and read-only. The LLM explains the outcome in plain language from the logged decision steps. After a quality-gate `FAIL` it reads the `QualityDiagnosis` in `previous_report` (section 5.3) and proposes new CTGAN settings (epochs, `pac`, discriminator steps, batch size); code clamps them to `gan_bounds` and logs them (issue #82). The Bank run permits `pac` 5–10, discriminator steps 1–3, and epochs 300–600. On its retry, the deterministic fallback uses the documented v2 training settings (`pac` 5, three discriminator steps, 300 epochs), and sampling uses the v2 recipe: unconditional draws, documented rule filtering, and raking to real training subscribers before writing nested fills. Other datasets retain the original sampling path and epoch-only fallback. Skipped routes (TimeGAN, WGAN-GP) are logged with a reason. Training itself is a tool call. The explanation runs once, on attempt 1. The settings proposal runs on a retry (attempt 2 with the default `max_attempts` of 3); every value must lie inside `gan_bounds`, a setting without a bound cannot change, epochs are never raised after a privacy failure, `batch_size` is made divisible by `pac`, and an answer that cannot be made valid is replaced by the rule's retry and logged. For datasets without the Bank v2 recipe, `rebalance_categories` and `change_sampling` are logged as unsupported adjustments.
+**Decision logic.** The generator is chosen by the rules above (`select_generator` in `tools/selection.py`). That choice stays code and read-only. The LLM explains the outcome in plain language from the logged decision steps. After a quality-gate `FAIL` it reads the `QualityDiagnosis` in `previous_report` (section 5.3) and proposes new CTGAN settings (epochs, `pac`, discriminator steps, batch size); code clamps them to `gan_bounds` and logs them (issue #82). The Bank run permits `pac` 5–10, discriminator steps 1–3, and epochs 300–600. Its first attempt uses the shared Bank v2 recipe. On its retry, the deterministic fallback uses the documented v2 training settings (`pac` 5, three discriminator steps, 300 epochs), and sampling uses the v2 recipe: unconditional draws, documented rule filtering, and raking to real training subscribers before writing nested fills. All fill levels use nested prefixes of one sample. Other datasets retain conditional sampling and the epoch-only fallback. Skipped routes (TimeGAN, WGAN-GP) are logged with a reason. Training itself is a tool call. The explanation runs once, on attempt 1. The settings proposal runs on a retry (attempt 2 with the default `max_attempts` of 3); every value must lie inside `gan_bounds`, a setting without a bound cannot change, epochs are never raised after a privacy failure, `batch_size` is made divisible by `pac`, and an answer that cannot be made valid is replaced by the rule's retry and logged. For datasets without the Bank v2 recipe, `rebalance_categories` and `change_sampling` are logged as unsupported adjustments.
 
 **Success.** Training completes, the checkpoint loads, and synthetic files match the real schema (columns, types, category sets).
 
@@ -376,14 +376,15 @@ For the primary dataset, the rules choose CTGAN. `bank-full` has no customer ide
 | Discriminator feedback | How well a classifier separates real from synthetic rows. Near chance is good | Real training split |
 | Label balance | Achieved fill level against the requested fill level | Request |
 
-**Gate logic (starting values, to be calibrated on the real data in EDA).**
+**Gate logic (fixed starting values; the fidelity and sanity limits are calibrated per dataset at run time, see the last bullet).**
 
 - Mean per-column KS and JS below 0.10, with no single column above 0.25.
 - Correlation-matrix mean absolute difference below 0.10.
-- TSTR AUC within 0.05 of TRTR AUC.
+- Utility: PR-AUC and best F1 with the synthetic rows added are reported against real-only training (`augmentation_pr_auc_gain`, `augmentation_best_f1_gain`). They do not gate (`hard = false`): whether augmentation helps is judged by the training and evaluation agents on real validation data. `utility_gain_hard` makes them gate again.
 - Median distance-to-closest-record for synthetic rows not smaller than for real validation rows, and zero exact duplicates of training rows.
 - Zero sanity violations after the config rule list.
 - Diversity and discriminator feedback are reported but do not gate (`hard = false`) until their thresholds are calibrated (issue #12). They still inform the retry. The 9 October discussion lists validity, diversity, duplication and discriminator feedback as the quality checks.
+- Calibration (issue #101): before scoring any level, the agent scores real validation rows of the class against real training rows. Each fidelity and sanity limit becomes `margin` (default 3.0) times that real-vs-real value, rounded up and never below a small floor, so a synthetic set about as close as a real sample passes with room for noise. The limits are kept in `quality/calibrated_thresholds.json` and logged as a `thresholds_calibrated` decision. The fixed values above are the fallback when `calibrate` is off or the validation split has fewer than 20 positive rows. `margin`, `calibrate` and `utility_gain_hard` are part of the rule hash, so an LLM cannot change them.
 
 The checks run on each synthetic set, that is, at each fill level. A level passes when all of its hard checks pass. The verdict is `PASS` if at least one level passes and `FAIL` if none does. On `FAIL`, the orchestrator retries the Model Selection Agent, which receives this report with its failing metrics and its diagnosis.
 
@@ -453,7 +454,7 @@ The checks run on each synthetic set, that is, at each fill level. A level passe
 - `TrainingOutput` cannot be `SUCCESS` if any record is `FAILED`. Skipped records are fine.
 - Add SMOTE rows to the `baseline` training split only, with `fill_rows(level, positives, negatives)` using that file's class counts (the ones the `PreprocessOutput` reports), so `smote` and `gan` add the same number of rows at each level. Never resample validation or test.
 - Use the same search space, folds and budget for every arm, so that a difference between arms comes from the data and not from tuning. Select on the real validation split only.
-- The grid is large: by default 5 fill levels for each of 2 augmented arms, times models and seeds, before tuning. At the default grid, Credit Card Fraud reaches about 170,000 synthetic rows, so use the reduced Fraud grid (0.01 to 0.10) from `docs/fraud_dataset_recommendation.md`. Plan the compute before running it.
+- The grid drives the cost: each fill level adds a set for each of 2 augmented arms, times models and seeds, before tuning. The default is one level (0.10). A sweep from 0.10 to 1.00 adds five, and at 1.00 Credit Card Fraud reaches about 170,000 synthetic rows, so use the reduced Fraud grid (0.01 to 0.10) from `docs/fraud_dataset_recommendation.md`. Plan the compute before running it.
 
 ### 5.5 Evaluation Agent (issue #10)
 

@@ -122,6 +122,18 @@ def test_full_quality_privacy_result_includes_diagnostic_columns():
     assert set(diagnostics["revealing_columns"]) <= {"x", "group"}
 
 
+def test_utility_gains_are_soft_unless_the_thresholds_make_them_hard():
+    train, val, synthetic = _tables()
+    gains = ["augmentation_pr_auc_gain", "augmentation_best_f1_gain"]
+
+    def hardness(thresholds):
+        checks, _ = quality_privacy_checks(train, val, synthetic, "y", thresholds=thresholds)
+        return [check.hard for check in checks if check.name in gains]
+
+    assert hardness(QualityThresholds()) == [False, False]
+    assert hardness(QualityThresholds(utility_gain_hard=True)) == [True, True]
+
+
 def test_rejects_nonpositive_synthetic_targets():
     train, val, synthetic = _tables()
     synthetic.loc[0, "y"] = 0
