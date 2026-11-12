@@ -23,7 +23,7 @@ from sklearn.metrics import f1_score, precision_score, recall_score
 
 from agentic_gan.tools.baselines import pr_auc_score
 
-METRICS = ("pr_auc", "f1", "precision", "recall")
+METRICS = ("pr_auc", "roc_auc", "f1", "accuracy", "precision", "recall")
 SPLITS = ("validation", "test")
 ARM_ORDER = ("original", "cleaned", "smotenc", "ctgan")
 REFERENCE_ARM = "original"
@@ -70,10 +70,11 @@ def compare_arms(metrics: pd.DataFrame, *, reference: str = REFERENCE_ARM) -> pd
     )
     table = table.reset_index()
     rank = table["arm"].map({arm: i for i, arm in enumerate(ARM_ORDER)}).fillna(len(ARM_ORDER))
-    order = table.assign(rank=rank).sort_values(
-        ["dataset", "rank", "fill_level", "split", "metric"]
+    metric_rank = table["metric"].map({metric: i for i, metric in enumerate(METRICS)})
+    order = table.assign(rank=rank, metric_rank=metric_rank).sort_values(
+        ["dataset", "rank", "fill_level", "split", "metric_rank"]
     )
-    return order.drop(columns="rank").reset_index(drop=True)
+    return order.drop(columns=["rank", "metric_rank"]).reset_index(drop=True)
 
 
 @dataclass(frozen=True)

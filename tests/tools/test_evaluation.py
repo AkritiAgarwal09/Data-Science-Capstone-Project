@@ -64,6 +64,8 @@ def arm_rows(arm, fill_level, scores):
                         "f1": pr_auc / 2,
                         "precision": pr_auc / 4,
                         "recall": pr_auc * 2,
+                        "roc_auc": 0.5 + pr_auc / 2,
+                        "accuracy": 0.7 + pr_auc / 4,
                     }
                 )
     return rows
@@ -112,6 +114,12 @@ def test_compare_arms_gives_mean_spread_and_paired_difference():
     # The unselected LightGBM rows (0.99) and the failed fit are left out; other metrics follow.
     assert pick(table, "ctgan", 0.25, "test", "f1").diff_mean == pytest.approx(0.02 / 2)
     assert pick(table, "ctgan", 0.25, "test", "recall").diff_mean == pytest.approx(0.02 * 2)
+    auroc = pick(table, "ctgan", 0.25, "validation", "roc_auc")
+    accuracy = pick(table, "ctgan", 0.25, "test", "accuracy")
+    assert auroc["mean"] == pytest.approx(0.765)
+    assert auroc.diff_mean == pytest.approx(0.03 / 2)
+    assert accuracy["mean"] == pytest.approx(0.825)
+    assert accuracy.diff_mean == pytest.approx(0.02 / 4)
 
 
 def test_compare_arms_orders_arms_then_fill_levels():
@@ -179,7 +187,14 @@ def test_reliable_gain_needs_at_least_three_paired_seeds():
 
 def test_comparison_reads_the_training_agents_own_metrics_file(tmp_path):
     def record(arm, level, seed, pr_auc, model="CatBoost", selected=True):
-        scores = {"pr_auc": pr_auc, "f1": 0.4, "precision": 0.5, "recall": 0.4, "roc_auc": 0.8}
+        scores = {
+            "pr_auc": pr_auc,
+            "f1": 0.4,
+            "precision": 0.5,
+            "recall": 0.4,
+            "roc_auc": 0.8,
+            "accuracy": 0.85,
+        }
         return ModelRecord(
             status=Status.SUCCESS,
             arm=arm,
@@ -206,6 +221,8 @@ def test_comparison_reads_the_training_agents_own_metrics_file(tmp_path):
     table = compare_arms(pd.read_csv(path))
     gan = pick(table, "ctgan", 0.25, "test")
     assert gan.diff_mean == pytest.approx(0.03) and gan.n_paired == 3
+    assert pick(table, "ctgan", 0.25, "test", "roc_auc")["mean"] == pytest.approx(0.8)
+    assert pick(table, "ctgan", 0.25, "test", "accuracy")["mean"] == pytest.approx(0.85)
     assert reliable_gain(table, dataset="bank_marketing", arm="ctgan", fill_level=0.25).reliable
 
 

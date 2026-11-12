@@ -681,6 +681,11 @@ def _prediction_table(table, target, probabilities, threshold):
     )
 
 
+def model_artifact_stem(arm: Arm, fill_level: float | None, seed: int, model: str) -> str:
+    """Shared filename stem for one model and its saved predictions."""
+    return f"{arm.value}_{fill_level or 0:g}_{seed}_{re.sub('[^a-z0-9]+', '_', model.lower())}"
+
+
 def _fit_record(
     arm,
     level,
@@ -730,7 +735,7 @@ def _fit_record(
                 predictions[part] = _prediction_table(
                     tables[part], config.target, probabilities, fields["threshold"]
                 )
-        stem = f"{arm.value}_{level or 0:g}_{seed}_{re.sub('[^a-z0-9]+', '_', name.lower())}"
+        stem = model_artifact_stem(arm, level, seed, name)
         model_path = folder / f"{stem}.joblib"
         paths = {part: folder / f"{stem}_{part}.csv" for part in predictions}
         joblib.dump(
