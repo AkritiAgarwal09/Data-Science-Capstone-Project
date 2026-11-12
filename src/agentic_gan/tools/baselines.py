@@ -385,7 +385,10 @@ def load_protocol(path, *, seed=42, cv_folds=3, metadata=None, y_val=None, y_tes
     if metadata is not None:
         expected.update({k: metadata[k] for k in ("source_sha256", "split_hashes", "config")})
     for key, value in expected.items():
-        if _digest(protocol.get(key)) != _digest(value):
+        saved = protocol.get(key)
+        if key == "config":  # ctgan is generator-stage only, and older protocols predate it
+            saved, value = ({k: v for k, v in c.items() if k != "ctgan"} for c in (saved, value))
+        if _digest(saved) != _digest(value):
             raise ValueError(f"Frozen protocol mismatch: {key}; create a separate experiment")
     for split, y in (("validation", y_val), ("test", y_test)):
         if y is not None and protocol[f"{split}_labels_sha256"] != _label_hash(y):

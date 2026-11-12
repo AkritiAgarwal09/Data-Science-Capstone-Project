@@ -22,3 +22,10 @@ eda/framework_spike/benchmark_*.jsonl
 # Tool caches
 .pytest_cache/
 .ruff_cache/
+
+node_modules/
+.agents/
+.claude/
+.codex/
+.cursor/
+.mcp.json

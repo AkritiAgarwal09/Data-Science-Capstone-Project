@@ -1,13 +1,14 @@
 """Validate bounded LLM answers and log every decision."""
 
 import math
+import os
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
 from pydantic import BaseModel
 
-from agentic_gan.orchestrator.decisions import log_decision
+from agentic_gan.orchestrator.decisions import log_decision, log_progress
 from agentic_gan.orchestrator.manifest import RunDir
 
 from .vertex import VertexClient
@@ -81,6 +82,7 @@ def run_llm_step(
         "allowed_options": options.allowed_options,
         "numeric_bounds": options.numeric_bounds,
         "rule_hash": options.expected_rule_hash,
+        "model": getattr(client, "model", None) or os.environ.get("VERTEX_MODEL"),
     }
 
     def check_rules():
@@ -98,8 +100,14 @@ def run_llm_step(
 
     check_rules()
     last_error = None
-    for _ in range(2):
+    for attempt in range(2):
         try:
+            log_progress(
+                role,
+                f"LLM call attempt={attempt + 1}/2",
+                tool=type(client).__name__ if client is not None else "VertexClient",
+                next_action="validate typed response",
+            )
             answer = (client or VertexClient()).complete(system_prompt, context, output_model)
             check_rules()
             result = _validate(answer, output_model, options)

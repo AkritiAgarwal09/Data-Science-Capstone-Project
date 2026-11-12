@@ -14,7 +14,7 @@ import pandas as pd
 from pydantic import Field, StrictBool
 
 from agentic_gan.llm import LLMStepOptions, run_llm_step
-from agentic_gan.orchestrator.decisions import log_decision, read_decisions
+from agentic_gan.orchestrator.decisions import log_decision, log_progress, read_decisions
 from agentic_gan.orchestrator.manifest import RunDir
 from agentic_gan.schemas import (
     GeneratorOutput,
@@ -77,7 +77,8 @@ EXPLAIN_PROMPT = (
     "Quote the specific numbers from those steps (row counts, limits, column counts). Set "
     "`generator` to exactly the value of `generator` in the context ('none' when no generator was "
     "chosen). You never choose, change or recommend a different generator, and you never change a "
-    "rule, threshold or gate. Keep the explanation under 150 words."
+    "rule, threshold or gate. Write at most two sentences: say what the gates checked and what "
+    "they mean for this dataset, naming the dataset and quoting its row and column counts."
 )
 
 RETRY_PROMPT = (
@@ -277,6 +278,7 @@ def _rule_hash(config: RunConfig) -> str:
         "gan_bounds": config.gan_bounds,
         "step_order": STEP_ORDER,
         "ctgan_defaults": CTGAN_DEFAULTS,
+        "generator_recipe": asdict(recipe_for(config.dataset_name)),
         "epoch_step": EPOCH_STEP,
         "privacy_checks": sorted(PRIVACY_CHECKS),
         "minority_min": params["minority_min"].default,
@@ -1363,6 +1365,12 @@ def _train_ctgan(
         {"attempt": attempt, **knobs, "seed": request.config.split_seed, "generator": "ctgan"},
         "SET", "CTGAN settings are inside gan_bounds.", run=run,
     )
+    log_progress(
+        "model_selection",
+        f"train CTGAN attempt={attempt} epochs={trainable['epochs']} rows={len(train)}",
+        tool="train_ctgan",
+        next_action="save checkpoint and sample fill levels",
+    )
     model = train_ctgan(
         train,
         target,
@@ -1375,6 +1383,8 @@ def _train_ctgan(
     positives = request.preprocess.baseline_train_positives
     negatives = request.preprocess.baseline_train_negatives
     counts = [fill_rows(level, positives, negatives) for level in request.config.fill_levels]
+    log_progress("model_selection", f"sample fill rows={max(counts)}",
+                 tool="sample_for_fill", next_action="write nested fill levels")
     # One draw covers every fill level; each level takes the first rows, so the sets are nested.
     rows = sample_for_fill(
         model,
