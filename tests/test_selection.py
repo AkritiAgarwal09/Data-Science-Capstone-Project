@@ -106,6 +106,13 @@ def test_bank_mixed_table_selects_ctgan():
     assert _step(result, "type_routing").inputs["generator"] == "ctgan"
 
 
+def test_bank_run_config_allows_the_v2_retry_settings():
+    bounds = graph_module.config_for_dataset("bank_marketing").gan_bounds
+    assert bounds["pac"] == (5, 10)
+    assert bounds["discriminator_steps"] == (1, 3)
+    assert bounds["epochs"][0] == 300
+
+
 def test_bank_duration_stops_at_leakage():
     result = select_generator(_data(leaky_columns=("duration",)))
     _assert_dcgan_excluded(result)
@@ -494,6 +501,53 @@ def test_bank_attempt_trains_ctgan_on_the_training_split_only(tmp_path, monkeypa
     for rule in ("dcgan_excluded", "size_gate", "missing_gate", "leakage_gate", "minority_gate",
                  "temporal_test", "type_routing"):
         assert rule in rules
+
+
+def test_bank_retry_uses_v2_training_and_sampling_recipe(tmp_path, monkeypatch, gan):
+    frame = _bank_frame(
+        month=["jan"] * 2000, poutcome=["unknown"] * 2000,
+        marital=["married"] * 2000, day_of_month=[1] * 2000,
+        pdays=[-1] * 2000, previously_contacted=[0] * 2000,
+        previous=[0] * 2000,
+    )
+    config = _config(tmp_path, gan_bounds={
+        "epochs": (300, 600), "pac": (5, 10), "discriminator_steps": (1, 3),
+    })
+    request, run, _ = _request(
+        tmp_path, config, frame, 500, 1500, attempt=2,
+        previous=_fail_report("worst_column_distance"),
+    )
+    from agentic_gan.tools.ctgan_sampling import sample_for_fill
+
+    def sample_small_pool(*args, **kwargs):
+        return sample_for_fill(*args, **kwargs, pool_rows=500)
+
+    monkeypatch.setattr("agentic_gan.agents.model_selection.sample_for_fill", sample_small_pool)
+    calls = []
+
+    def sample(_model, n, **kwargs):
+        calls.append((n, kwargs))
+        positive = frame.loc[frame.y == 1].drop(columns="source_row").head(n).copy()
+        assert kwargs["row_filter"](positive).all()
+        invalid = positive.head(1).copy()
+        invalid["pdays"] = 2
+        assert not kwargs["row_filter"](invalid).any()
+        return positive.assign(is_synthetic=1)
+
+    monkeypatch.setattr("agentic_gan.tools.ctgan.sample_synthetic", sample)
+    output = run_model_selection(request, run)
+    assert output.status is Status.SUCCESS
+    assert {name: gan.trains[0][1][name] for name in ("epochs", "pac", "discriminator_steps")} == {
+        "epochs": 300, "pac": 5, "discriminator_steps": 3,
+    }
+    assert len(calls) == 1
+    assert calls[0][1]["conditional"] is False
+    assert calls[0][1]["max_rounds"] == 100
+    assert calls[0][0] >= max(item.rows for item in output.synthetic_sets)
+    fills = [pd.read_csv(item.path) for item in output.synthetic_sets]
+    assert fills[0].equals(fills[-1].head(len(fills[0])))
+    assert output.hyperparameters["sampling_mode"] == "unconditional"
+    assert output.hyperparameters["rule_filter"] is True
 
 
 BANK_V2_KNOBS = {
@@ -1701,9 +1755,8 @@ def test_backup_eligible_false_when_fallback_is_not_wgan_gp():
 
 
 def test_rule_hash_stable_after_step7(tmp_path):
-    # Step 6 added no hash change (STEP_ORDER untouched); Step 7 added WGAN_DEFAULTS,
-    # so the hash moved. Pinned here as the new stable value.
-    post_step7_hash = "6f5f99f09d20f90c1b76560833b465861182c4a1e20fb6358ea179e8ceb13db7"
+    # Covers WGAN defaults and the Bank settings and sampling recipe merged from main.
+    post_step7_hash = "1a5c7c509b6b85392c76c920d3af1243d8186ac094d88bdc73ce723f90dedaa2"
     config = _config(tmp_path)
     assert _rule_hash(config) == post_step7_hash
 
