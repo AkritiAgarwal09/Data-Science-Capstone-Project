@@ -387,6 +387,8 @@ class _Gan:
         self.trains = []
         self.samples = []
         self.sample_options = []
+        self.wgan_trains = []
+        self.wgan_samples = []
 
     def train(self, train_df, target_col, **kwargs):
         self.trains.append((train_df.copy(), kwargs))
@@ -405,6 +407,32 @@ class _Gan:
         frame[drop_duplicates_of.columns[-1]] = target_value
         return frame
 
+    def wgan_train(self, train_df, target_col, positive=1, discrete_columns=(), **kwargs):
+        self.wgan_trains.append((train_df.copy(), kwargs))
+        log_path = kwargs.get("log_path")
+        if log_path is not None:
+            pd.DataFrame(
+                {"Epoch": [1], "Generator Loss": [0.1], "Discriminator Loss": [0.2],
+                 "Gradient Penalty": [0.5]}
+            ).to_csv(log_path, index=False)
+        feature_cols = [c for c in train_df.columns if c != target_col]
+        return SimpleNamespace(
+            target_col=target_col, positive=positive, columns=feature_cols,
+            numeric_ranges={}, integer_valued=set(), discrete_columns=list(discrete_columns),
+            transformer=None,
+        )
+
+    def wgan_save(self, model, path):
+        Path(path).write_bytes(b"wgangp")
+
+    def wgan_sample(self, model, n, *, seed, row_filter=None, drop_duplicates_of=None, **kwargs):
+        from agentic_gan.utils.synthetic import IS_SYNTHETIC
+        self.wgan_samples.append(n)
+        frame = pd.DataFrame({name: [1] * n for name in model.columns})
+        frame[model.target_col] = model.positive
+        frame[IS_SYNTHETIC] = 1
+        return frame
+
 
 @pytest.fixture
 def gan(monkeypatch):
@@ -412,6 +440,9 @@ def gan(monkeypatch):
     monkeypatch.setattr("agentic_gan.tools.ctgan.train_ctgan", tool.train)
     monkeypatch.setattr("agentic_gan.tools.ctgan.save_model", tool.save)
     monkeypatch.setattr("agentic_gan.tools.ctgan.sample_synthetic", tool.sample)
+    monkeypatch.setattr("agentic_gan.tools.wgan_gp.train_wgan_gp", tool.wgan_train)
+    monkeypatch.setattr("agentic_gan.tools.wgan_gp.save_model", tool.wgan_save)
+    monkeypatch.setattr("agentic_gan.tools.wgan_gp.sample_wgan_gp", tool.wgan_sample)
     return tool
 
 
@@ -563,9 +594,8 @@ def test_default_selects_timegan_and_does_not_train(tmp_path, gan):
 
 def test_constant_polish_cohort_does_not_make_ratios_mixed(tmp_path, gan):
     # A constant cohort column is hidden as the horizon label; the remaining features are
-    # all-numeric, so the rule selects wgan_gp. wgan_gp is now trainable (Step 6), so
-    # run_model_selection proceeds to train; until Step 7 wires _train_wgan_gp, it falls
-    # through to the CTGAN path.
+    # all-numeric, so the rule selects wgan_gp trainable (Step 6). Step 7 wires dispatch
+    # so the WGAN-GP path is now taken for the all-numeric route.
     rows, positives = 2000, 600
     frame = pd.DataFrame({
         "A1": range(rows),
@@ -576,9 +606,10 @@ def test_constant_polish_cohort_does_not_make_ratios_mixed(tmp_path, gan):
     config = _config(tmp_path, dataset_name="polish", target="bankrupt", positive_class=1)
     request, run, _path = _request(tmp_path, config, frame, positives, rows - positives)
     output = run_model_selection(request, run)
-    assert output.status is Status.SUCCESS  # wgan_gp is now trainable; training proceeds
-    assert "CTGAN" in output.rationale  # rationale comes from the selection result
-    assert gan.trains  # CTGAN path runs (Step 7 will add wgan_gp dispatch)
+    assert output.status is Status.SUCCESS  # wgan_gp is trainable and dispatched
+    assert output.generator == "wgan_gp"  # all-numeric route trains WGAN-GP
+    assert gan.wgan_trains  # WGAN-GP stub was called
+    assert gan.trains == []  # CTGAN was not called
 
 
 def test_pooled_polish_cohorts_do_not_train(tmp_path, gan):
@@ -665,16 +696,20 @@ def test_every_privacy_check_name_blocks_more_epochs(tmp_path, gan, check):
     assert _logged(run, "retry_unchanged") == "UNCHANGED"
 
 
-def test_third_attempt_documents_wgan_and_does_not_train(tmp_path, gan):
+def test_third_attempt_trains_wgan_gp_backup(tmp_path, gan):
+    # Attempt 3 on the CTGAN (mixed) route: backup_eligible is True for Bank
+    # (500 positives == minority_min, so FORBIDDEN_CLASS_ONLY is NOT raised).
+    # Step 7 wires the WGAN-GP backup, so it now trains (mocked) and returns SUCCESS.
     frame = _bank_frame()
     request, run, _path = _request(
         tmp_path, _config(tmp_path), frame, 500, 1500, attempt=3,
         previous=_fail_report("column_distance"),
     )
     output = run_model_selection(request, run)
-    assert output.status is Status.SKIPPED
+    assert output.status is Status.SUCCESS  # WGAN-GP backup trains
     assert output.generator == "wgan_gp"
-    assert gan.trains == []
+    assert gan.wgan_trains  # WGAN-GP stub was called
+    assert gan.trains == []  # CTGAN was not called on attempt 3
 
 
 def test_impossible_batch_bounds_do_not_train(tmp_path, gan):
@@ -1665,8 +1700,17 @@ def test_backup_eligible_false_when_fallback_is_not_wgan_gp():
     assert "not wgan_gp" in reason
 
 
-def test_rule_hash_unchanged_after_step6(tmp_path):
-    # STEP_ORDER is untouched, so the hash must equal the pre-step-6 value.
-    pre_step6_hash = "3400177438acc29adee47d79a53cbfdb7e6f4333880bc158f4223e8bffefa3bb"
+def test_rule_hash_stable_after_step7(tmp_path):
+    # Step 6 added no hash change (STEP_ORDER untouched); Step 7 added WGAN_DEFAULTS,
+    # so the hash moved. Pinned here as the new stable value.
+    post_step7_hash = "6f5f99f09d20f90c1b76560833b465861182c4a1e20fb6358ea179e8ceb13db7"
     config = _config(tmp_path)
-    assert _rule_hash(config) == pre_step6_hash
+    assert _rule_hash(config) == post_step7_hash
+
+
+def test_changing_wgan_defaults_changes_rule_hash(tmp_path, monkeypatch):
+    from agentic_gan.agents import model_selection as ms
+    config = _config(tmp_path)
+    original_hash = _rule_hash(config)
+    monkeypatch.setattr(ms, "WGAN_DEFAULTS", {**ms.WGAN_DEFAULTS, "epochs": 999})
+    assert _rule_hash(config) != original_hash

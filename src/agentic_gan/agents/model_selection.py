@@ -12,7 +12,7 @@ from dataclasses import asdict
 import pandas as pd
 from pydantic import Field
 
-from agentic_gan.llm import LLMStepOptions, run_llm_step
+from agentic_gan.llm import LLMStepOptions, RuleOverrideError, run_llm_step
 from agentic_gan.orchestrator.decisions import log_decision
 from agentic_gan.orchestrator.manifest import RunDir
 from agentic_gan.schemas import (
@@ -25,7 +25,7 @@ from agentic_gan.schemas import (
     SyntheticSet,
     fill_rows,
 )
-from agentic_gan.tools.ctgan_sampling import recipe_for, sample_for_fill
+from agentic_gan.tools.ctgan_sampling import recipe_for, rule_row_filter, sample_for_fill
 from agentic_gan.tools.quality_fidelity import RULES
 from agentic_gan.tools.quality_privacy import PRIVACY_CHECKS
 from agentic_gan.tools.selection import (
@@ -33,6 +33,7 @@ from agentic_gan.tools.selection import (
     ColumnSpec,
     DataCharacteristics,
     SelectionResult,
+    backup_eligible,
     select_generator,
     temporal_facts,
 )
@@ -47,6 +48,16 @@ CTGAN_DEFAULTS = {
     "pac": 10,
     "discriminator_steps": 1,
 }
+WGAN_DEFAULTS = {
+    "epochs": 300,
+    "batch_size": 256,
+    "embedding_dim": 128,
+    "n_critic": 5,
+    "gp_lambda": 10.0,
+    "lr": 1e-4,
+}
+# Testing aid: set to False to skip the WGAN-GP backup and go straight to CTGAN.
+WGAN_BACKUP_ENABLED = True
 # The CTGAN settings a retry may move, each inside its gan_bounds range.
 SETTING_NAMES = ("epochs", "pac", "discriminator_steps", "batch_size")
 FIDELITY_TOKENS = ("column_distance", "correlation", "ks", "js", "fidelity")
@@ -100,6 +111,7 @@ def _rule_hash(config: RunConfig) -> str:
         "gan_bounds": config.gan_bounds,
         "step_order": STEP_ORDER,
         "ctgan_defaults": CTGAN_DEFAULTS,
+        "wgan_defaults": WGAN_DEFAULTS,
         "epoch_step": EPOCH_STEP,
         "privacy_checks": sorted(PRIVACY_CHECKS),
         "minority_min": params["minority_min"].default,
@@ -193,8 +205,43 @@ def run_model_selection(
 
     if result.status == "skipped" or not result.trainable:
         return _skipped(result)
-    if request.attempt >= 3:
-        return _fallback_attempt(result, request.attempt, run)
+
+    # Dispatch on the selected generator. WGAN-GP has no CTGAN-style ladder.
+    if result.generator == "wgan_gp":
+        if request.attempt >= 2:
+            log_decision(
+                "model_selection", "retry_not_applicable",
+                {"attempt": request.attempt, "generator": "wgan_gp"},
+                "NOT_APPLIED",
+                "WGAN-GP has no retry ladder; settings are fixed across attempts.",
+                run=run,
+            )
+        return _train_wgan_gp(request, run, model_frame, result)
+
+    # CTGAN route — attempt 3 may use the WGAN-GP backup.
+    if result.generator == "ctgan" and request.attempt >= 3:
+        eligible, reason = backup_eligible(result)
+        if eligible and WGAN_BACKUP_ENABLED:
+            try:
+                return _train_wgan_gp(request, run, model_frame, result)
+            except Exception as exc:  # noqa: BLE001
+                if isinstance(exc, RuleOverrideError):
+                    raise
+                _cleanup_wgan_attempt(run, request.attempt)
+                err_msg = f"{type(exc).__name__}: {str(exc)[:300]}"
+                log_decision(
+                    "model_selection", "backup_failed",
+                    {"attempt": request.attempt, "generator": "wgan_gp", "error": err_msg},
+                    "FALLBACK_CTGAN",
+                    "WGAN-GP raised, so attempt 3 trains CTGAN.",
+                    run=run,
+                )
+        else:
+            log_decision(
+                "model_selection", "backup_skipped",
+                {"attempt": request.attempt, "generator": "wgan_gp", "reason": reason},
+                "NOT_ELIGIBLE", reason, run=run,
+            )
 
     positives = request.preprocess.baseline_train_positives
     negatives = request.preprocess.baseline_train_negatives
@@ -370,17 +417,107 @@ def _skipped(result: SelectionResult) -> GeneratorOutput:
     )
 
 
-def _fallback_attempt(result: SelectionResult, attempt: int, run: RunDir) -> GeneratorOutput:
-    fallback = result.fallback or "wgan_gp"
-    reason = f"Attempt {attempt} uses fallback {fallback}, which is not implemented."
+def _train_wgan_gp(
+    request: ModelSelectionInput,
+    run: RunDir,
+    train: pd.DataFrame,
+    result: SelectionResult,
+) -> GeneratorOutput:
+    from agentic_gan.tools.wgan_gp import sample_wgan_gp, save_model, train_wgan_gp  # noqa: PLC0415
+
+    dataset = request.config.dataset_name
+    target = request.config.target
+    positive = _positive_class(request.config.positive_class, train[target])
+    discrete = _discrete_columns(train, target, dataset)
+    folder = run.subdir("synthetic")
+    attempt = request.attempt
+    checkpoint = folder / f"wgan_gp_attempt_{attempt}.pkl"
+    loss_path = folder / f"wgan_gp_loss_attempt_{attempt}.csv"
+    positives = request.preprocess.baseline_train_positives
+    negatives = request.preprocess.baseline_train_negatives
+    counts = [fill_rows(level, positives, negatives) for level in request.config.fill_levels]
+    if any(count < 1 for count in counts):
+        reason = "A fill level rounds to no rows, so nothing is generated."
+        log_decision(
+            "model_selection", "fill_rows",
+            {"attempt": attempt, "counts": counts},
+            "SKIPPED", reason, run=run,
+        )
+        return GeneratorOutput(status=Status.SKIPPED, reason=reason, rationale=reason)
     log_decision(
-        "model_selection", "fallback",
-        {"attempt": attempt, "primary": result.generator, "fallback": fallback},
-        "SKIPPED", reason, run=run,
+        "model_selection", "hyperparameters",
+        {
+            "attempt": attempt,
+            **WGAN_DEFAULTS,
+            "seed": request.config.split_seed,
+            "generator": "wgan_gp",
+            "training_rows": positives,
+        },
+        "SET", "WGAN-GP settings.", run=run,
     )
+    model = train_wgan_gp(
+        train,
+        target_col=target,
+        positive=positive,
+        discrete_columns=discrete,
+        log_path=loss_path,
+        seed=request.config.split_seed,
+        **WGAN_DEFAULTS,
+    )
+    save_model(model, checkpoint)
+    max_count = max(counts)
+    rules = RULES.get(dataset, ())
+    row_filter = rule_row_filter(rules) if rules else None
+    pool = sample_wgan_gp(
+        model,
+        max_count,
+        seed=request.config.split_seed,
+        row_filter=row_filter,
+        drop_duplicates_of=train,
+    )
+    if IS_SYNTHETIC not in pool.columns:
+        pool = pool.copy()
+        pool[IS_SYNTHETIC] = 1
+    sets = []
+    for level, count in zip(request.config.fill_levels, counts, strict=True):
+        sample = pool.head(count)
+        if len(sample) != count:
+            raise ValueError(
+                f"synthetic rows {len(sample)} do not match fill_rows {count} at {level}"
+            )
+        path = folder / f"fill_{_level_token(level)}_attempt_{attempt}.csv"
+        sample.to_csv(path, index=False)
+        sets.append(SyntheticSet(fill_level=level, rows=count, path=path.resolve()))
     return GeneratorOutput(
-        status=Status.SKIPPED, reason=reason, generator=fallback, rationale=reason,
+        status=Status.SUCCESS,
+        generator="wgan_gp",
+        rationale=result.rationale,
+        hyperparameters={
+            "attempt": attempt,
+            **WGAN_DEFAULTS,
+            "seed": request.config.split_seed,
+            "generator": "wgan_gp",
+        },
+        checkpoint_path=checkpoint.resolve(),
+        loss_history_path=loss_path.resolve(),
+        synthetic_sets=sets,
     )
+
+
+def _cleanup_wgan_attempt(run: RunDir, attempt: int) -> None:
+    """Remove partial WGAN-GP files written for this attempt after a training failure."""
+    folder = run.subdir("synthetic")
+    for path in [
+        folder / f"wgan_gp_attempt_{attempt}.pkl",
+        folder / f"wgan_gp_loss_attempt_{attempt}.csv",
+    ]:
+        if path.exists():
+            path.unlink()
+    for path in folder.glob(f"fill_*_attempt_{attempt}.csv"):
+        try:
+            path.unlink()
+        except OSError:
+            pass
 
 
 def _bounds_json(bounds: dict) -> dict:
