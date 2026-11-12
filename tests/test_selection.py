@@ -735,15 +735,26 @@ def test_selection_explanation_rejects_unknown_fields_and_empty_text():
 
 
 def test_retry_settings_reject_unknown_fields_and_an_empty_reason():
-    RetrySettings(epochs=400, pac=10, discriminator_steps=1, batch_size=500, reason="more epochs")
-    with pytest.raises(ValidationError):
-        RetrySettings(epochs=400, pac=10, discriminator_steps=1, batch_size=500, reason="")
+    RetrySettings(
+        epochs=400, pac=10, discriminator_steps=1, batch_size=500,
+        sampling_mode="conditional", rule_filter=False, rake_columns=[], reason="more epochs",
+    )
     with pytest.raises(ValidationError):
         RetrySettings(
-            epochs=400, pac=10, discriminator_steps=1, batch_size=500, reason="ok", seed=1
+            epochs=400, pac=10, discriminator_steps=1, batch_size=500,
+            sampling_mode="conditional", rule_filter=False, rake_columns=[], reason="",
         )
     with pytest.raises(ValidationError):
-        RetrySettings(epochs=400, pac=10, discriminator_steps=1, reason="missing batch_size")
+        RetrySettings(
+            epochs=400, pac=10, discriminator_steps=1, batch_size=500,
+            sampling_mode="conditional", rule_filter=False, rake_columns=[], reason="ok", seed=1,
+        )
+    with pytest.raises(ValidationError):
+        RetrySettings(
+            epochs=400, pac=10, discriminator_steps=1,
+            sampling_mode="conditional", rule_filter=False, rake_columns=[],
+            reason="missing batch_size",
+        )
 
 
 # --- Explanation step ----------------------------------------------------------------------------
@@ -853,24 +864,28 @@ PINNED = {name: (value, value) for name, value in CTGAN_DEFAULTS.items()}
 
 
 def test_retry_limits_are_none_when_nothing_is_bounded():
-    assert _retry_limits(CTGAN_DEFAULTS, {}, privacy=False) is None
-    assert _retry_limits(CTGAN_DEFAULTS, {}, privacy=True) is None
+    # Signature change (issue #123 step 2): options are always movable, so _retry_limits
+    # returns RetryLimits with pinned numerics instead of None.
+    for privacy in (False, True):
+        limits = _retry_limits(CTGAN_DEFAULTS, {}, privacy=privacy)
+        assert limits is not None
+        assert limits.numeric == PINNED
 
 
 def test_retry_limits_open_only_the_bounded_setting():
     limits = _retry_limits(CTGAN_DEFAULTS, {"epochs": (100, 600)}, privacy=False)
-    assert limits == {**PINNED, "epochs": (100, 600)}
+    assert limits.numeric == {**PINNED, "epochs": (100, 600)}
 
 
 def test_retry_limits_cap_epochs_at_the_current_value_after_a_privacy_failure():
     limits = _retry_limits(CTGAN_DEFAULTS, {"epochs": (100, 600)}, privacy=True)
-    assert limits == {**PINNED, "epochs": (100, CTGAN_DEFAULTS["epochs"])}
+    assert limits.numeric == {**PINNED, "epochs": (100, CTGAN_DEFAULTS["epochs"])}
 
 
 def test_retry_limits_round_fractional_edges_inward_to_integers():
     limits = _retry_limits(CTGAN_DEFAULTS, {"epochs": (99.5, 600.4)}, privacy=False)
-    assert limits["epochs"] == (100, 600)
-    assert all(isinstance(edge, int) for edge in limits["epochs"])
+    assert limits.numeric["epochs"] == (100, 600)
+    assert all(isinstance(edge, int) for edge in limits.numeric["epochs"])
 
 
 def test_retry_limits_return_every_bounded_range():
@@ -880,7 +895,7 @@ def test_retry_limits_return_every_bounded_range():
         "discriminator_steps": (1, 3),
         "batch_size": (100, 1000),
     }
-    assert _retry_limits(CTGAN_DEFAULTS, bounds, privacy=False) == bounds
+    assert _retry_limits(CTGAN_DEFAULTS, bounds, privacy=False).numeric == bounds
 
 
 def test_retry_limits_pin_a_setting_whose_bound_cannot_hold_it():
@@ -889,15 +904,23 @@ def test_retry_limits_pin_a_setting_whose_bound_cannot_hold_it():
         CTGAN_DEFAULTS, {"pac": (10.2, 10.8), "epochs": (400, 600), "batch_size": (100, 1000)},
         privacy=False,
     )
-    assert limits["pac"] == (10, 10)
-    assert limits["epochs"] == (300, 300)
-    assert limits["batch_size"] == (100, 1000)
+    assert limits.numeric["pac"] == (10, 10)
+    assert limits.numeric["epochs"] == (300, 300)
+    assert limits.numeric["batch_size"] == (100, 1000)
 
 
 # --- Retry proposer ------------------------------------------------------------------------------
 
-PROPOSAL = {"epochs": 500, "pac": 10, "discriminator_steps": 1, "batch_size": 500,
-            "reason": "more training"}
+PROPOSAL = {
+    "epochs": 500,
+    "pac": 10,
+    "discriminator_steps": 1,
+    "batch_size": 500,
+    "sampling_mode": "unconditional",
+    "rule_filter": True,
+    "rake_columns": ["job", "month", "poutcome", "marital", "day_of_month"],
+    "reason": "more training",
+}
 
 
 def _retry_request(tmp_path, gan_bounds, *failed, diagnosis=None, run_id="sel"):
@@ -925,7 +948,7 @@ def test_rule_retry_always_lies_inside_the_retry_limits(tmp_path, gan_bounds, fa
     privacy = bool(set(failed) & PRIVACY_CHECKS)
     limits = _retry_limits(CTGAN_DEFAULTS, gan_bounds, privacy)
     assert limits is not None
-    for name, (low, high) in limits.items():
+    for name, (low, high) in limits.numeric.items():
         assert low <= rule_settings[name] <= high
 
 
@@ -1045,6 +1068,9 @@ ANSWER = {
     "pac": 10,
     "discriminator_steps": 1,
     "batch_size": 500,
+    "sampling_mode": "unconditional",
+    "rule_filter": True,
+    "rake_columns": ["job", "month", "poutcome", "marital", "day_of_month"],
     "reason": "more training",
 }
 

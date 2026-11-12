@@ -7,10 +7,11 @@ import inspect
 import json
 import math
 from collections.abc import Sequence
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
+from typing import Literal
 
 import pandas as pd
-from pydantic import Field
+from pydantic import Field, StrictBool
 
 from agentic_gan.llm import LLMStepOptions, run_llm_step
 from agentic_gan.orchestrator.decisions import log_decision
@@ -49,6 +50,11 @@ CTGAN_DEFAULTS = {
 }
 # The CTGAN settings a retry may move, each inside its gan_bounds range.
 SETTING_NAMES = ("epochs", "pac", "discriminator_steps", "batch_size")
+KNOB_NAMES = ("sampling_mode", "rule_filter", "rake_columns")
+RETRY_OPTIONS = {
+    "sampling_mode": ("conditional", "unconditional"),
+    "rule_filter": (False, True),
+}
 FIDELITY_TOKENS = ("column_distance", "correlation", "ks", "js", "fidelity")
 # A constant cohort is the horizon id, not a ratio the generator should learn.
 HORIZON_LABEL = "cohort"
@@ -89,7 +95,19 @@ class RetrySettings(Schema):
     pac: int
     discriminator_steps: int
     batch_size: int
+    sampling_mode: Literal["conditional", "unconditional"]
+    rule_filter: StrictBool
+    rake_columns: list[str]
     reason: str = Field(min_length=1)
+
+
+@dataclass(frozen=True)
+class RetryLimits:
+    """Numeric ranges, categorical options, and the allowed rake set for one retry."""
+
+    numeric: dict[str, tuple[int, int]]
+    options: dict[str, tuple]
+    rake_allowed: tuple[str, ...]
 
 
 def _rule_hash(config: RunConfig) -> str:
@@ -104,8 +122,26 @@ def _rule_hash(config: RunConfig) -> str:
         "privacy_checks": sorted(PRIVACY_CHECKS),
         "minority_min": params["minority_min"].default,
         "min_steps": params["min_steps"].default,
+        "retry_options": {
+            "sampling_mode": list(RETRY_OPTIONS["sampling_mode"]),
+            "rule_filter": list(RETRY_OPTIONS["rule_filter"]),
+        },
     }
     return hashlib.sha256(json.dumps(locked, sort_keys=True).encode()).hexdigest()
+
+
+def allowed_rake_columns(
+    discrete_feature_columns: Sequence[str],
+    recipe_rake_columns: Sequence[str],
+    table_columns: Sequence[str],
+) -> list[str]:
+    """Discrete features (no target) ∪ recipe rake columns present in the table, in table order."""
+    table = list(table_columns)
+    present = set(table)
+    wanted = {name for name in discrete_feature_columns if name in present} | {
+        name for name in recipe_rake_columns if name in present
+    }
+    return [name for name in table if name in wanted]
 
 
 def measure_training_frame(
@@ -412,15 +448,23 @@ def _failed_hard_checks(request: ModelSelectionInput) -> list[str]:
 
 
 def _retry_limits(
-    settings: dict[str, int], gan_bounds: dict, privacy: bool
-) -> dict[str, tuple[int, int]] | None:
-    """Inclusive integer range the LLM may use for each setting, or None if nothing is tunable.
+    settings: dict[str, int],
+    gan_bounds: dict,
+    privacy: bool,
+    *,
+    rake_allowed: Sequence[str] = (),
+) -> RetryLimits | None:
+    """Inclusive ranges and options the LLM may use, or None if nothing is tunable.
 
     A setting with no config bound is pinned to its current value, and so is one whose bound
     holds no integer or does not contain the current value. After a privacy failure epochs may
     not rise: a longer-trained generator copies more real rows.
+
+    "Nothing tunable" (return None) means every numeric setting is pinned AND the categorical
+    options cannot move. sampling_mode and rule_filter always have at least two legal values in
+    RETRY_OPTIONS, so None is practically unreachable; this function always returns RetryLimits.
     """
-    limits: dict[str, tuple[int, int]] = {}
+    numeric: dict[str, tuple[int, int]] = {}
     for name in SETTING_NAMES:
         current = int(settings[name])
         if name in gan_bounds:
@@ -432,10 +476,13 @@ def _retry_limits(
             high = min(high, current)
         if low > high or not low <= current <= high:
             low = high = current
-        limits[name] = (low, high)
-    if all(low == high for low, high in limits.values()):
-        return None
-    return limits
+        numeric[name] = (low, high)
+    # Options always remain movable (see docstring); never return None.
+    return RetryLimits(
+        numeric=numeric,
+        options={name: tuple(values) for name, values in RETRY_OPTIONS.items()},
+        rake_allowed=tuple(rake_allowed),
+    )
 
 
 def _rule_retry(
@@ -464,28 +511,57 @@ def _rule_retry(
     return updated, "hyperparameter_retry", rationale
 
 
-def _normalize(answer: RetrySettings, limits: dict[str, tuple[int, int]]) -> dict[str, int] | None:
+def _normalize(
+    answer: RetrySettings,
+    limits: RetryLimits | dict[str, tuple[int, int]],
+    *,
+    rake_allowed: Sequence[str] | None = None,
+) -> dict | None:
     """Make a proposal a legal CTGAN setting, or None if that is not possible inside the limits.
 
     The runtime already enforced the numeric bounds; the clip is a safety net. CTGAN raises
     unless batch_size is a multiple of pac, so a non-divisible batch is snapped down (or up to
-    the first multiple inside the range).
+    the first multiple inside the range). sampling_mode / rule_filter outside RETRY_OPTIONS, or
+    rake_columns outside the allowed set or with duplicates, are rejected (no silent drops).
     """
-    values = {}
+    if isinstance(limits, RetryLimits):
+        numeric = limits.numeric
+        allowed = list(limits.rake_allowed if rake_allowed is None else rake_allowed)
+        options = limits.options
+    else:
+        numeric = limits
+        allowed = list(rake_allowed or ())
+        options = RETRY_OPTIONS
+    values: dict = {}
     for name in SETTING_NAMES:
-        low, high = limits[name]
+        low, high = numeric[name]
         values[name] = int(min(max(getattr(answer, name), low), high))
     if any(value < 1 for value in values.values()):
         return None
     batch, pac = values["batch_size"], values["pac"]
     if batch % pac != 0:
-        low, high = limits["batch_size"]
+        low, high = numeric["batch_size"]
         snapped = batch // pac * pac
         if snapped < low:
             snapped += pac
         if not low <= snapped <= high:
             return None
         values["batch_size"] = snapped
+    sampling_mode = answer.sampling_mode
+    rule_filter = answer.rule_filter
+    if sampling_mode not in options["sampling_mode"]:
+        return None
+    if rule_filter not in options["rule_filter"]:
+        return None
+    rake = list(answer.rake_columns)
+    if len(rake) != len(set(rake)):
+        return None
+    allowed_set = set(allowed)
+    if any(name not in allowed_set for name in rake):
+        return None
+    values["sampling_mode"] = sampling_mode
+    values["rule_filter"] = bool(rule_filter)
+    values["rake_columns"] = rake
     return values
 
 
@@ -506,6 +582,23 @@ def _failed_check_summaries(request: ModelSelectionInput) -> list[dict]:
     ]
 
 
+def _retry_settings_answer(
+    settings: dict, request: ModelSelectionInput, reason: str
+) -> RetrySettings:
+    """Build a RetrySettings from numeric settings, filling knobs from settings or the recipe."""
+    recipe = asdict(recipe_for(request.config.dataset_name))
+    return RetrySettings(
+        epochs=int(settings["epochs"]),
+        pac=int(settings["pac"]),
+        discriminator_steps=int(settings["discriminator_steps"]),
+        batch_size=int(settings["batch_size"]),
+        sampling_mode=settings.get("sampling_mode", recipe["sampling_mode"]),
+        rule_filter=bool(settings.get("rule_filter", recipe["rule_filter"])),
+        rake_columns=list(settings.get("rake_columns", recipe["rake_columns"])),
+        reason=reason,
+    )
+
+
 def _propose_retry(
     settings: dict[str, int], request: ModelSelectionInput, run: RunDir, client
 ) -> dict[str, int]:
@@ -513,11 +606,22 @@ def _propose_retry(
     rule_settings, _rule_name, rule_reason = _rule_retry(settings, request)
     failed = _failed_hard_checks(request)
     privacy = bool(set(failed) & PRIVACY_CHECKS)
-    limits = _retry_limits(settings, request.config.gan_bounds, privacy)
+    recipe = recipe_for(request.config.dataset_name)
+    limits = _retry_limits(
+        settings,
+        request.config.gan_bounds,
+        privacy,
+        rake_allowed=list(recipe.rake_columns),
+    )
     applied, reason, source, proposed = rule_settings, rule_reason, "rule", None
     _log_unsupported_adjustments(request, run)
-    if limits is not None:
-        fallback = RetrySettings(**rule_settings, reason="Rule-based default: " + rule_reason)
+    # _retry_limits always returns RetryLimits (options are always movable). Until the ladder
+    # lands, keep the old gate: only call the LLM when at least one numeric setting can move.
+    numeric_open = any(low != high for low, high in limits.numeric.values())
+    if numeric_open:
+        fallback = _retry_settings_answer(
+            rule_settings, request, "Rule-based default: " + rule_reason
+        )
         report = request.previous_report
         diagnosis = report.diagnosis.model_dump() if report and report.diagnosis else None
         context = json.dumps(
@@ -527,7 +631,7 @@ def _propose_retry(
                 "failed_hard_checks": _failed_check_summaries(request),
                 "diagnosis": diagnosis,
                 "current_settings": settings,
-                "limits": {name: list(edges) for name, edges in limits.items()},
+                "limits": {name: list(edges) for name, edges in limits.numeric.items()},
                 "privacy_failed": privacy,
             },
             default=str,
@@ -539,7 +643,7 @@ def _propose_retry(
             RetrySettings,
             LLMStepOptions(
                 fallback=fallback,
-                numeric_bounds={name: limits[name] for name in SETTING_NAMES},
+                numeric_bounds={name: limits.numeric[name] for name in SETTING_NAMES},
                 expected_rule_hash=_rule_hash(request.config),
                 current_rule_hash=lambda: _rule_hash(run.load_config()),
             ),
@@ -556,15 +660,25 @@ def _propose_retry(
                     {
                         "attempt": request.attempt,
                         "proposed": proposed,
-                        "limits": {name: list(edges) for name, edges in limits.items()},
+                        "limits": {
+                            name: list(edges) for name, edges in limits.numeric.items()
+                        },
                     },
                     "REJECTED",
                     "could not be made a valid CTGAN setting",
                     run=run,
                 )
             else:
-                applied, reason, source = normalized, answer.reason, "llm"
+                # Keep returning only the four numeric keys until Step 5 wires the knobs.
+                applied = {name: normalized[name] for name in SETTING_NAMES}
+                reason, source = answer.reason, "llm"
     changed = any(applied[name] != settings[name] for name in SETTING_NAMES)
+    # Log None when every numeric is pinned (matches the pre-knob "nothing tunable" line).
+    logged_limits = (
+        {name: list(edges) for name, edges in limits.numeric.items()}
+        if numeric_open
+        else None
+    )
     log_decision(
         "model_selection",
         "hyperparameter_retry" if changed else "retry_unchanged",
@@ -574,7 +688,7 @@ def _propose_retry(
             "previous_settings": settings,
             "proposed": proposed,
             "applied": applied,
-            "limits": {name: list(edges) for name, edges in limits.items()} if limits else None,
+            "limits": logged_limits,
             "failed_checks": failed,
             "privacy_failed": privacy,
             # Kept for readers of the earlier one-setting log line.
