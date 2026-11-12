@@ -11,11 +11,13 @@ from __future__ import annotations
 
 import logging
 import pickle
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
@@ -306,7 +308,7 @@ def load_model(path: str | Path) -> TrainedWGANGP:
 
 
 # ---------------------------------------------------------------------------
-# Training loop  (Step 2)
+# Training loop
 # ---------------------------------------------------------------------------
 
 def train_wgan_gp(
@@ -328,13 +330,162 @@ def train_wgan_gp(
 ) -> TrainedWGANGP:
     """Fit WGAN-GP on positive-class rows of the cleaned training split.
 
-    Implemented in Step 2.
+    Per-epoch losses are epoch means (averaged over all iterations in the epoch).
+    The loss history DataFrame has columns: Epoch, Generator Loss,
+    Discriminator Loss, Gradient Penalty.
     """
-    raise NotImplementedError("train_wgan_gp is implemented in Step 2")
+    _validate_args(epochs, batch_size, embedding_dim, generator_dim, critic_dim,
+                   n_critic, gp_lambda, lr, device)
+
+    _device = (
+        "cuda" if (device == "cuda" or (device == "auto" and torch.cuda.is_available()))
+        else "cpu"
+    )
+
+    features, discrete_features = prepare_positive_rows(
+        train_df, target_col, positive, discrete_columns
+    )
+
+    # Seed before transformer fit: DataTransformer.fit uses numpy for GMM fitting,
+    # so numpy must be seeded to get deterministic transformer parameters.
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+
+    from ctgan.data_transformer import DataTransformer  # lazy: ctgan imports are heavy
+    transformer = DataTransformer()
+    transformer.fit(features, discrete_columns=discrete_features)
+
+    real_data = transformer.transform(features)
+    real_tensor = torch.tensor(real_data, dtype=torch.float32, device=_device)
+    n_rows, data_dim = real_tensor.shape
+
+    # Record ranges and integer-valued flags from positive rows only
+    numeric_cols = [
+        c for c in features.columns
+        if pd.api.types.is_numeric_dtype(features[c]) and c not in discrete_features
+    ]
+    numeric_ranges = {c: (float(features[c].min()), float(features[c].max())) for c in numeric_cols}
+    integer_valued = [
+        c for c in numeric_cols
+        if bool((features[c] == features[c].round()).all())
+    ]
+
+    # Networks (generator first so n_critic test can distinguish by creation order)
+    generator = Generator(embedding_dim, generator_dim, data_dim).to(_device)
+    critic_net = Critic(data_dim, critic_dim).to(_device)
+
+    gen_opt = torch.optim.Adam(generator.parameters(), lr=lr, betas=(0.5, 0.9))
+    crit_opt = torch.optim.Adam(critic_net.parameters(), lr=lr, betas=(0.5, 0.9))
+
+    # Dedicated PRNG for noise and batch indices; does not consume the global state
+    # (global state is used by gradient_penalty's torch.rand and gumbel_softmax).
+    rng = torch.Generator(device=_device)
+    rng.manual_seed(seed)
+
+    steps_per_epoch = max(n_rows // batch_size, 1)
+    loss_rows: list[dict] = []
+    start = time.perf_counter()
+
+    for epoch in range(epochs):
+        generator.train()
+        critic_net.train()
+
+        ep_gen: list[float] = []
+        ep_crit: list[float] = []
+        ep_gp: list[float] = []
+
+        for _ in range(steps_per_epoch):
+            # --- n_critic critic updates ---
+            for _ in range(n_critic):
+                # Real batch: sample with replacement so size is always batch_size
+                idx = torch.randint(0, n_rows, (batch_size,), generator=rng, device=_device)
+                real_batch = real_tensor[idx]
+
+                # Fake batch: detach so critic backward doesn't flow into generator
+                noise = torch.randn(batch_size, embedding_dim, generator=rng, device=_device)
+                with torch.no_grad():
+                    fake_batch = apply_activate(generator(noise), transformer.output_info_list)
+
+                gp = gradient_penalty(critic_net, real_batch, fake_batch, gp_lambda, _device)
+                crit_loss = critic_net(fake_batch).mean() - critic_net(real_batch).mean() + gp
+
+                crit_opt.zero_grad()
+                crit_loss.backward()
+                crit_opt.step()
+
+                ep_crit.append(crit_loss.item())
+                ep_gp.append(gp.item())
+
+            # --- ONE generator update (critic params must not change) ---
+            noise = torch.randn(batch_size, embedding_dim, generator=rng, device=_device)
+            fake_activated = apply_activate(generator(noise), transformer.output_info_list)
+            gen_loss = -critic_net(fake_activated).mean()
+
+            gen_opt.zero_grad()
+            gen_loss.backward()
+            gen_opt.step()
+
+            ep_gen.append(gen_loss.item())
+
+        mean_gen = float(np.mean(ep_gen))
+        mean_crit = float(np.mean(ep_crit))
+        mean_gp = float(np.mean(ep_gp))
+
+        if not all(np.isfinite([mean_gen, mean_crit, mean_gp])):
+            raise RuntimeError(f"WGAN-GP diverged at epoch {epoch + 1}")
+
+        loss_rows.append({
+            "Epoch": epoch + 1,
+            "Generator Loss": mean_gen,
+            "Discriminator Loss": mean_crit,
+            "Gradient Penalty": mean_gp,
+        })
+
+    train_seconds = time.perf_counter() - start
+    loss_history = pd.DataFrame(loss_rows)
+
+    if log_path is not None:
+        log_path = Path(log_path)
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        loss_history.to_csv(log_path, index=False)
+
+    generator.eval()
+    critic_net.eval()
+
+    logger.info(
+        "WGAN-GP trained on %d rows, %d features, device=%s in %.1fs; "
+        "final G=%.3f D=%.3f",
+        n_rows, len(features.columns), _device, train_seconds,
+        loss_history["Generator Loss"].iloc[-1],
+        loss_history["Discriminator Loss"].iloc[-1],
+    )
+
+    return TrainedWGANGP(
+        generator=generator,
+        critic=critic_net,
+        transformer=transformer,
+        target_col=target_col,
+        positive=positive,
+        columns=train_df.columns.tolist(),
+        feature_columns=features.columns.tolist(),
+        discrete_columns=discrete_features,
+        dtypes={c: str(t) for c, t in train_df.dtypes.items()},
+        params={
+            "epochs": epochs, "batch_size": batch_size, "embedding_dim": embedding_dim,
+            "generator_dim": generator_dim, "critic_dim": critic_dim,
+            "n_critic": n_critic, "gp_lambda": gp_lambda, "lr": lr,
+            "device": device, "seed": seed,
+        },
+        loss_history=loss_history,
+        train_seconds=train_seconds,
+        n_train_rows=n_rows,
+        numeric_ranges=numeric_ranges,
+        integer_valued=integer_valued,
+    )
 
 
 # ---------------------------------------------------------------------------
-# Sampler  (Step 3)
+# Sampler
 # ---------------------------------------------------------------------------
 
 def sample_wgan_gp(
@@ -348,6 +499,102 @@ def sample_wgan_gp(
 ) -> pd.DataFrame:
     """Sample ``n`` synthetic positive-class rows from a fitted WGAN-GP.
 
-    Implemented in Step 3.
+    A fresh ``torch.Generator`` seeded from ``seed`` is created so the output is
+    reproducible and independent of earlier calls. Each round overshoots the need
+    by 20 % plus 10 rows, capped at 100,000, guided by keep_rate (fraction of
+    generated rows that survive filtering).  If max_rounds are exhausted with
+    fewer than ``n`` rows, logs a warning and returns what is available; the
+    caller decides how to handle the shortfall.
+
+    The model is not mutated.
     """
-    raise NotImplementedError("sample_wgan_gp is implemented in Step 3")
+    if isinstance(n, bool) or not isinstance(n, int) or n <= 0:
+        raise ValueError("n must be a positive integer")
+    if not isinstance(seed, int):
+        raise ValueError("seed must be an int")
+
+    # Seed both the dedicated Generator and the global state.
+    # apply_activate calls F.gumbel_softmax which uses the global random state,
+    # so it must also be reset to make the output reproducible.
+    rng = torch.Generator()
+    rng.manual_seed(seed)
+    torch.manual_seed(seed)
+
+    embedding_dim = model.params["embedding_dim"]
+
+    seen: set[tuple] = set()
+    if drop_duplicates_of is not None:
+        seen.update(map(tuple, drop_duplicates_of[model.columns].itertuples(index=False)))
+
+    kept: list[pd.DataFrame] = []
+    total = 0
+    drawn = 0
+    usable = 0
+    keep_rate = 1.0
+
+    for _ in range(max_rounds):
+        need = n - total
+        request = min(int(need / max(keep_rate, 0.02) * 1.2) + 10, 100_000)
+
+        noise = torch.randn(request, embedding_dim, generator=rng)
+        with torch.no_grad():
+            raw = model.generator(noise)
+            activated = apply_activate(raw, model.transformer.output_info_list)
+
+        samples_np = activated.cpu().numpy()
+        batch = model.transformer.inverse_transform(samples_np)
+        if not isinstance(batch, pd.DataFrame):
+            batch = pd.DataFrame(batch, columns=model.feature_columns)
+
+        drawn += len(batch)
+
+        # Restore dtypes: clip numeric to training range, round integer columns
+        for col, (low, high) in model.numeric_ranges.items():
+            if col in batch.columns:
+                batch[col] = batch[col].clip(low, high)
+        for col in model.integer_valued:
+            if col in batch.columns:
+                batch[col] = batch[col].round()
+        for col, dtype in model.dtypes.items():
+            if col in batch.columns and dtype.startswith(("int", "uint")):
+                batch[col] = batch[col].round().astype(dtype)
+
+        # Restore target column and original column order
+        batch[model.target_col] = model.positive
+        batch = batch[model.columns].reset_index(drop=True)
+
+        if row_filter is not None:
+            mask = row_filter(batch)
+            batch = batch[mask.to_numpy()].reset_index(drop=True)
+
+        usable += len(batch)
+
+        if drop_duplicates_of is not None:
+            keep_rows: list[bool] = []
+            for row in batch.itertuples(index=False):
+                key = tuple(row)
+                if key not in seen:
+                    seen.add(key)
+                    keep_rows.append(True)
+                else:
+                    keep_rows.append(False)
+            batch = batch[keep_rows].reset_index(drop=True)
+
+        kept.append(batch.head(need))
+        total += len(kept[-1])
+        keep_rate = usable / max(drawn, 1)
+
+        if total >= n:
+            break
+    else:
+        logger.warning(
+            "Only %d of %d valid synthetic rows after %d rounds",
+            total, n, max_rounds,
+        )
+
+    if not kept:
+        return pd.DataFrame(columns=model.columns + [IS_SYNTHETIC])
+
+    out = pd.concat(kept, ignore_index=True).head(n)
+    out[IS_SYNTHETIC] = 1
+    return out[model.columns + [IS_SYNTHETIC]].reset_index(drop=True)
