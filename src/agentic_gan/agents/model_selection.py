@@ -13,7 +13,7 @@ import pandas as pd
 from pydantic import Field
 
 from agentic_gan.llm import LLMStepOptions, run_llm_step
-from agentic_gan.orchestrator.decisions import log_decision
+from agentic_gan.orchestrator.decisions import log_decision, log_progress
 from agentic_gan.orchestrator.manifest import RunDir
 from agentic_gan.schemas import (
     GeneratorOutput,
@@ -36,6 +36,7 @@ from agentic_gan.tools.selection import (
     select_generator,
     temporal_facts,
 )
+from agentic_gan.utils.ctgan_settings import V2
 from agentic_gan.utils.datasets import DATASETS
 from agentic_gan.utils.synthetic import IS_SYNTHETIC
 
@@ -60,7 +61,8 @@ EXPLAIN_PROMPT = (
     "Quote the specific numbers from those steps (row counts, limits, column counts). Set "
     "`generator` to exactly the value of `generator` in the context ('none' when no generator was "
     "chosen). You never choose, change or recommend a different generator, and you never change a "
-    "rule, threshold or gate. Keep the explanation under 150 words."
+    "rule, threshold or gate. Write at most two sentences: say what the gates checked and what "
+    "they mean for this dataset, naming the dataset and quoting its row and column counts."
 )
 
 RETRY_PROMPT = (
@@ -70,6 +72,8 @@ RETRY_PROMPT = (
     "the inclusive range given for that setting in `limits`; a setting whose range has equal low "
     "and high cannot change, so return its current value. batch_size must be divisible by pac. If "
     "`privacy_failed` is true the generator may be copying real rows, so do not raise epochs. "
+    "For Bank Marketing, the documented v2 run improved fidelity with 300 epochs, pac 5 and "
+    "three discriminator steps; 600 epochs made it worse. Its sampling recipe is fixed by code. "
     "Explain in `reason` which failed checks or columns your changes target. You never change a "
     "rule, threshold, range or the choice of generator."
 )
@@ -100,6 +104,8 @@ def _rule_hash(config: RunConfig) -> str:
         "gan_bounds": config.gan_bounds,
         "step_order": STEP_ORDER,
         "ctgan_defaults": CTGAN_DEFAULTS,
+        "bank_v2_settings": {name: V2[name] for name in SETTING_NAMES},
+        "generator_recipe": asdict(recipe_for(config.dataset_name)),
         "epoch_step": EPOCH_STEP,
         "privacy_checks": sorted(PRIVACY_CHECKS),
         "minority_min": params["minority_min"].default,
@@ -443,14 +449,18 @@ def _rule_retry(
 ) -> tuple[dict[str, int], str, str]:
     """The deterministic retry, with no logging: (new settings, rule name, rationale).
 
-    More epochs inside gan_bounds when a fidelity check failed, unless a privacy check failed
-    too. The LLM proposer uses this as its fallback.
+    Bank v2 uses pac 5 and three discriminator steps when bounds allow them. Other retries
+    add epochs after a fidelity failure unless privacy failed. The LLM uses this as fallback.
     """
     failed = _failed_hard_checks(request)
     privacy = _privacy_failed(failed)
     fidelity = _matches(failed, FIDELITY_TOKENS)
     bounds = request.config.gan_bounds
     previous = settings["epochs"]
+    if _bank_v2_enabled(request):
+        updated = {**settings, "pac": V2["pac"],
+                   "discriminator_steps": V2["discriminator_steps"]}
+        return updated, "hyperparameter_retry", "Bank v2: pac 5 and three discriminator steps"
     if privacy or not fidelity or "epochs" not in bounds:
         rationale = "no privacy-safe adjustment" if privacy else "retry has no legal adjustment"
         return settings, "retry_unchanged", rationale
@@ -462,6 +472,16 @@ def _rule_retry(
     updated = {**settings, "epochs": proposed}
     rationale = f"epochs move from {previous} to {proposed} inside gan_bounds"
     return updated, "hyperparameter_retry", rationale
+
+
+def _bank_v2_enabled(request: ModelSelectionInput) -> bool:
+    if request.config.dataset_name != "bank_marketing" or request.attempt != 2:
+        return False
+    bounds = request.config.gan_bounds
+    return all(
+        name in bounds and bounds[name][0] <= V2[name] <= bounds[name][1]
+        for name in ("pac", "discriminator_steps")
+    )
 
 
 def _normalize(answer: RetrySettings, limits: dict[str, tuple[int, int]]) -> dict[str, int] | None:
@@ -598,7 +618,7 @@ def _log_unsupported_adjustments(request: ModelSelectionInput, run: RunDir) -> N
     if report is None or report.diagnosis is None:
         return
     for adjustment in dict.fromkeys(report.diagnosis.adjustments):
-        if adjustment in UNSUPPORTED_ADJUSTMENTS:
+        if adjustment in UNSUPPORTED_ADJUSTMENTS and not _bank_v2_enabled(request):
             log_decision(
                 "model_selection",
                 "unsupported_adjustment",
@@ -647,6 +667,12 @@ def _train_ctgan(
         {"attempt": attempt, **knobs, "seed": request.config.split_seed, "generator": "ctgan"},
         "SET", "CTGAN settings are inside gan_bounds.", run=run,
     )
+    log_progress(
+        "model_selection",
+        f"train CTGAN attempt={attempt} epochs={trainable['epochs']} rows={len(train)}",
+        tool="train_ctgan",
+        next_action="save checkpoint and sample fill levels",
+    )
     model = train_ctgan(
         train,
         target,
@@ -659,6 +685,8 @@ def _train_ctgan(
     positives = request.preprocess.baseline_train_positives
     negatives = request.preprocess.baseline_train_negatives
     counts = [fill_rows(level, positives, negatives) for level in request.config.fill_levels]
+    log_progress("model_selection", f"sample fill rows={max(counts)}",
+                 tool="sample_for_fill", next_action="write nested fill levels")
     # One draw covers every fill level; each level takes the first rows, so the sets are nested.
     rows = sample_for_fill(
         model,

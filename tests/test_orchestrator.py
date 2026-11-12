@@ -27,6 +27,22 @@ def test_graph_is_visualizable():
     assert "partial_report" in diagram
 
 
+def test_progress_log_shows_stage_tool_llm_and_next_action(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("AGENTIC_GAN_PROGRESS", "1")
+    llm = FakeLLM([{
+        "what_happened": "The run completed.",
+        "why": "The stages succeeded.",
+        "next_step": "Review the report.",
+    }])
+    state, _ = run_pipeline(config(tmp_path), runs_dir=tmp_path / "runs",
+                            agents=default_agents(), llm=llm)
+    assert state.is_complete
+    progress = capsys.readouterr().err
+    assert "agent=split | attempt=1 started | tool=StubAgent" in progress
+    assert "next=preprocessing" in progress
+    assert "agent=narrative | LLM call attempt=1/2 | tool=FakeLLM" in progress
+
+
 def test_dataset_configs_cover_all_four_sources():
     assert set(DATASETS) == {"bank_marketing", "default", "polish", "ieee_cis"}
     assert {config_for_dataset(name).target for name in DATASETS} == {"y", "bankrupt", "isFraud"}
@@ -89,6 +105,32 @@ def test_quality_exhaustion_continues_without_gan(tmp_path):
         for entry in run.load_manifest().entries
     )
     assert run.load_manifest().verify(run) == []
+
+
+def test_third_selection_skip_after_failed_quality_checks_continues(tmp_path):
+    agents = default_agents()
+    selector = agents[Stage.MODEL_SELECTION]
+    agents[Stage.QUALITY_CHECK] = StubAgent(
+        Stage.QUALITY_CHECK, failures=-1, failure_mode="quality"
+    )
+
+    def select(request, run):
+        if request.attempt == 3:
+            return GeneratorOutput(
+                status=Status.SKIPPED,
+                reason="Fallback generator is unavailable",
+                generator="wgan_gp",
+            )
+        return selector(request, run)
+
+    agents[Stage.MODEL_SELECTION] = select
+    state, run = run_pipeline(config(tmp_path), runs_dir=tmp_path / "runs", agents=agents)
+    assert state.is_complete
+    assert state.status(Stage.MODEL_SELECTION) is Status.SKIPPED
+    assert state.status(Stage.QUALITY_CHECK) is Status.SUCCESS
+    assert state.attempts(Stage.QUALITY_CHECK) == 2
+    assert state.gan_available is False
+    assert read_decisions(run).query("rule == 'stage_error'").empty
 
 
 def test_stage_error_retries_once_then_stops(tmp_path):
