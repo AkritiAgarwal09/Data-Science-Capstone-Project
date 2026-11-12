@@ -9,6 +9,8 @@ Status: built. Vite + React + TypeScript + Motion (`motion/react`), chosen from 
 - Model per agent: `run_llm_step` now records the model in the `llm_step` decision's inputs; the API reports the latest one per agent. Agents with no LLM decision show "rules only"; split shows "no model".
 - Font: Inter everywhere, self-hosted via `@fontsource-variable/inter` (no CDN).
 - Each stage's popover shows a headline and bullet facts (split ratios and row counts, preprocessing treatments, chosen generator and gates, quality verdict and diagnosis, and the training and evaluation summaries), with the raw decision log in a dropdown below. `web.py` builds these from the run's own files, with no extra LLM calls.
+- The app opens on a dataset chooser. Picking one POSTs `/api/start`; `web.py` launches `python -m agentic_gan.orchestrator --dataset <name>` as a subprocess (loading `.env`, one run at a time, JSON content type required) and the page opens the new run as soon as its folder appears. Progress prints in the server terminal. Datasets whose data file is missing are shown disabled.
+- Model selection and quality check explanations come from the agents' own instructions (`EXPLAIN_PROMPT`, `DIAGNOSIS_PROMPT`), logged in `decisions.jsonl` and shown under each stage's headline. Quality check only explains when the gate fails, because it only calls the LLM then.
 - Flow diagram is hand-drawn SVG, as recommended. No React Flow.
 
 ## Goal

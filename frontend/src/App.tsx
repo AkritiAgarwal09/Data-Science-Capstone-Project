@@ -10,14 +10,15 @@ type RunView = {
   agent_of: Record<string, string>;
   models: Record<string, string>;
   decisions: Decision[];
-  summaries: Record<string, { headline: string; facts: string[] }>;
+  summaries: Record<string, { headline: string; facts: string[]; explain?: string; gates?: { name: string; outcome: string; meaning: string; detail: string }[] }>;
   evaluation: Evaluation | null;
 };
 type Cell = { mean: number; lift: number; verdict: string };
 type Evaluation = {
   metrics: string[];
   reference: number[];
-  rows: { arm: string; fill: number; cells: Cell[] }[];
+  reference_model: string;
+  rows: { arm: string; fill: number; model: string; cells: Cell[] }[];
   findings: { arm: string; metric: string; verdict: string; text: string; n: number }[];
   sections: { title: string; paragraphs: string[] }[];
 };
@@ -127,16 +128,18 @@ function EvaluationView({ e }: { e: Evaluation }) {
       <motion.div variants={rowV} className="evWrap">
         <table className="ev">
           <thead>
-            <tr><th>Test set lift vs Original</th>{e.metrics.map((m) => <th key={m}>{METRIC(m)}</th>)}</tr>
+            <tr><th>Test set lift vs Original</th><th>Classifier</th>{e.metrics.map((m) => <th key={m}>{METRIC(m)}</th>)}</tr>
           </thead>
           <tbody>
             <tr className="ref">
               <td>Original (reference)</td>
+              <td className="model">{e.reference_model}</td>
               {e.reference.map((v, i) => <td key={i}><span className="mean">{v.toFixed(3)}</span></td>)}
             </tr>
             {e.rows.map((r) => (
               <tr key={r.arm + r.fill}>
                 <td>{armLabel(r.arm, r.fill)}</td>
+                <td className="model">{r.model}</td>
                 {r.cells.map((c, i) => (
                   <td key={i} className={tone(c.verdict)} title={c.verdict}>
                     {sign(c.lift)}<span className="mean">{c.mean.toFixed(3)}</span>
@@ -146,7 +149,7 @@ function EvaluationView({ e }: { e: Evaluation }) {
             ))}
           </tbody>
         </table>
-        <p className="legend"><i className="gain" /> reliable gain <i className="loss" /> reliable loss <i className="flat" /> inconclusive</p>
+        <p className="legend"><i className="gain" /> reliable gain <i className="loss" /> reliable loss <i className="flat" /> inconclusive · Classifier: picked per seed on validation, ×n = seeds that picked it</p>
       </motion.div>
       {(["cleaned", "smotenc"] as const).map((arm) => (
         <motion.div variants={rowV} className="finds" key={arm}>
@@ -198,6 +201,64 @@ function LogDropdown({ rows }: { rows: Decision[] }) {
   );
 }
 
+type DatasetInfo = { name: string; target: string; ready: boolean };
+
+function StartScreen(props: {
+  datasets: DatasetInfo[]; busy: boolean; starting: string | null; error: string | null;
+  runs: string[]; onStart: (name: string) => void; onOpen: (run: string) => void;
+}) {
+  const { datasets, busy, starting, error, runs } = props;
+  return (
+    <main>
+      <div className="glow" />
+      <header>
+        <div className="brand">Agentic GAN</div>
+        {runs.length > 0 && <RunPicker runs={runs} value="Previous runs" onChange={props.onOpen} />}
+      </header>
+      <section className="hero">
+        <div className="eyebrow">
+          <span className={`live${starting ? " on" : ""}`} />
+          {starting ? "Starting" : "New run"}
+        </div>
+        <div className="heroTitle">
+          <AnimatePresence mode="popLayout" initial={false}>
+            <motion.h2
+              key={starting ?? "choose"}
+              initial={{ opacity: 0, y: 14, filter: "blur(8px)" }}
+              animate={{ opacity: 1, y: 0, filter: "blur(0px)", transition: { duration: 0.5, ease: EASE_OUT } }}
+              exit={{ opacity: 0, y: -10, filter: "blur(8px)", transition: { duration: 0.4 } }}
+            >
+              {starting ? label(starting) : "Choose a dataset"}
+            </motion.h2>
+          </AnimatePresence>
+        </div>
+        <p className="sub">
+          {error ?? (starting ? "The agents are getting started…" : busy ? "A run is already in progress." : "Pick one and the agents begin straight away.")}
+        </p>
+      </section>
+      <div className="dsList" style={{ opacity: busy ? 0.4 : 1, transition: "opacity 0.25s" }}>
+        {datasets.map((d, i) => (
+          <motion.button
+            key={d.name}
+            className="ds"
+            disabled={busy || !d.ready}
+            whileTap={{ scale: 0.97 }}
+            initial={{ opacity: 0, y: 12 }}
+            animate={{ opacity: d.ready ? 1 : 0.4, y: 0 }}
+            transition={{ duration: IN, ease: EASE_OUT, delay: i * 0.03 }}
+            onClick={() => props.onStart(d.name)}
+          >
+            <span className="num">{String(i + 1).padStart(2, "0")}</span>
+            <span className="dsName">{label(d.name)}</span>
+            <span className="dsMeta">{d.ready ? `Target: ${d.target}` : "Data file missing"}</span>
+            <span className="dsGo">→</span>
+          </motion.button>
+        ))}
+      </div>
+    </main>
+  );
+}
+
 function Icon({ status }: { status: string }) {
   return (
     <span className="icon">
@@ -218,8 +279,14 @@ function Icon({ status }: { status: string }) {
 
 export default function App() {
   const runs = useJson<string[]>("/api/runs") ?? [];
+  const catalog = useJson<{ datasets: DatasetInfo[]; running: boolean }>("/api/datasets", 3000);
   const [picked, setPicked] = useState<string | null>(null);
-  const runId = picked ?? runs[0] ?? null;
+  // The app opens on the dataset chooser; a run view follows once one is started or opened.
+  const [mode, setMode] = useState<"start" | "run">("start");
+  const [starting, setStarting] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const newestBefore = useRef<string | null>(null);
+  const runId = mode === "run" ? (picked ?? runs[0] ?? null) : null;
   const run = useJson<RunView>(runId && `/api/runs/${runId}`);
   const [selected, setSelected] = useState<string | null>(null);
 
@@ -238,6 +305,24 @@ export default function App() {
     return () => window.removeEventListener("resize", measure);
   }, [stageCount]);
 
+  // A started run shows up as a new newest folder; open it as soon as it appears.
+  useEffect(() => {
+    if (starting && runs[0] && runs[0] !== newestBefore.current) {
+      setPicked(runs[0]);
+      setMode("run");
+      setStarting(null);
+    }
+  }, [starting, runs]);
+
+  const start = (name: string) => {
+    setError(null);
+    setStarting(name);
+    newestBefore.current = runs[0] ?? null;
+    fetch("/api/start", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ dataset: name }) })
+      .then((r) => { if (!r.ok) throw new Error(r.status === 409 ? "A run is already in progress." : "Could not start the run."); })
+      .catch((e: Error) => { setStarting(null); setError(e.message); });
+  };
+
   // Knob follows the pointer 1:1 while held, then snaps with ease-in-out on release.
   const knobX = useMotionValue(0);
   const knobScale = useMotionValue(1);
@@ -249,11 +334,24 @@ export default function App() {
     if (!held.current && centers[knobIdx] !== undefined) knobX.set(centers[knobIdx]);
   }, [centers, knobIdx, knobX]);
 
+  if (mode === "start") {
+    return (
+      <StartScreen
+        datasets={catalog?.datasets ?? []}
+        busy={!!starting || !!catalog?.running}
+        starting={starting}
+        error={error}
+        runs={runs}
+        onStart={start}
+        onOpen={(r) => { setPicked(r); setSelected(null); setMode("run"); }}
+      />
+    );
+  }
   if (!runId || !run) {
     return (
       <main>
         <div className="brand">Agentic GAN</div>
-        <p className="hint">{runs.length ? "Loading…" : "No runs yet. Waiting for one to start."}</p>
+        <p className="hint">Loading…</p>
       </main>
     );
   }
@@ -290,7 +388,10 @@ export default function App() {
       <div className="glow" />
       <header>
         <div className="brand">Agentic GAN</div>
-        <RunPicker runs={runs} value={runId} onChange={(r) => { setPicked(r); setSelected(null); }} />
+        <div className="headerRight">
+          <motion.button className="btn" whileTap={{ scale: 0.97 }} onClick={() => setMode("start")}>New run</motion.button>
+          <RunPicker runs={runs} value={runId} onChange={(r) => { setPicked(r); setSelected(null); }} />
+        </div>
       </header>
 
       <section className="hero">
@@ -444,11 +545,24 @@ export default function App() {
                   {run.summaries[selected] && (
                     <motion.p className="headline" variants={rowV}>{run.summaries[selected].headline}</motion.p>
                   )}
+                  {run.summaries[selected]?.explain && (
+                    <motion.p className="explain" variants={rowV}>{run.summaries[selected].explain}</motion.p>
+                  )}
                   {selected === "evaluation" && run.evaluation && (
                     <motion.div variants={rowV}><ReportDropdown sections={run.evaluation.sections} /></motion.div>
                   )}
                 </div>
                 <div className="detailBody">
+                  {run.summaries[selected]?.gates?.map((g) => (
+                    <motion.div className="gate" key={g.name} variants={rowV}>
+                      <div className="gateHead">
+                        <span>{label(g.name)}</span>
+                        <b className={g.outcome === "PASS" ? "gain" : g.outcome === "FAIL" ? "loss" : "flat"}>{g.outcome.toLowerCase()}</b>
+                      </div>
+                      <p>{g.meaning}</p>
+                      <small>{g.detail}</small>
+                    </motion.div>
+                  ))}
                   {run.summaries[selected]?.facts.map((f, i) => (
                     <motion.span className="row" key={i} variants={rowV}>{f}</motion.span>
                   ))}

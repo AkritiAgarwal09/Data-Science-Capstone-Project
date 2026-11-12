@@ -68,6 +68,8 @@ def config_for_dataset(dataset: str) -> RunConfig:
         dataset_path=Path(source.file).resolve(),
         target=source.target,
         positive_class="yes" if dataset == "bank_marketing" else 1,
+        gan_bounds={"epochs": (300, 600), "pac": (5, 10), "discriminator_steps": (1, 3)}
+        if dataset == "bank_marketing" else {},
     )
 
 

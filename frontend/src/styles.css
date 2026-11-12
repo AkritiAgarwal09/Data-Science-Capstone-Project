@@ -107,3 +107,24 @@ header { display: flex; align-items: center; justify-content: space-between; }
 .reportSec { margin-top: 20px; }
 .reportSec p { margin: 0 0 10px; font-size: 13px; color: rgba(255, 255, 255, 0.75); }
 .hl { color: var(--accent); }
+.explain { margin: 14px 0 0; font-size: 14px; line-height: 1.6; color: var(--muted); }
+
+.headerRight { display: flex; align-items: center; gap: 10px; }
+.dsList { display: grid; gap: 0; max-width: 760px; }
+.ds { display: grid; grid-template-columns: 64px 1fr auto 28px; align-items: baseline; gap: 16px; text-align: left;
+  padding: 22px 8px; border-top: 1px solid var(--faint); transition: background 0.25s, padding 0.25s; }
+.ds:last-child { border-bottom: 1px solid var(--faint); }
+.ds:not(:disabled):hover { background: rgba(255, 255, 255, 0.03); padding-left: 16px; }
+.ds:disabled { cursor: default; }
+.ds .num { font-size: 28px; }
+.dsName { font-weight: 200; font-size: 26px; letter-spacing: -0.01em; }
+.dsMeta { color: var(--muted); font-size: 12px; }
+.dsGo { color: var(--accent); font-weight: 200; font-size: 20px; text-align: right; }
+
+.gate { padding: 12px 0; border-top: 1px solid var(--faint); }
+.gate:first-child { border-top: 0; padding-top: 0; }
+.gateHead { display: flex; justify-content: space-between; align-items: baseline; font-size: 14px; font-weight: 300; }
+.gateHead b { font-size: 10px; font-weight: 300; letter-spacing: 0.18em; text-transform: uppercase; }
+.gate p { margin: 4px 0 2px; font-size: 13px; color: rgba(255, 255, 255, 0.75); }
+.gate small { display: block; font-size: 12px; color: var(--muted); }
+.ev th:nth-child(2), .ev td.model { text-align: left; color: var(--muted); font-size: 11px; font-weight: 300; }

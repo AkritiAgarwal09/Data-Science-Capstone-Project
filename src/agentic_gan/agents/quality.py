@@ -37,8 +37,11 @@ DIAGNOSIS_PROMPT = (
     "generator. Use only the check results given: each failed check lists its value and the "
     "limit it missed. Name only checks and columns that appear in them. Quote the classifier AUC "
     "(real_vs_synthetic_auc) with its real_vs_real_auc baseline. Say in plain language what the "
-    "failures suggest went wrong. Choose adjustments only from allowed_adjustments. You never "
-    "change a verdict, threshold or rule."
+    "failures suggest went wrong. Begin `likely_cause` with one or two sentences that say what "
+    "the checks measure (how closely synthetic rows match real positive-class rows, whether they "
+    "copy real rows, whether they help a classifier) and why that matters for this dataset, "
+    "naming the dataset; then give the cause. Choose adjustments only from allowed_adjustments. "
+    "You never change a verdict, threshold or rule."
 )
 
 

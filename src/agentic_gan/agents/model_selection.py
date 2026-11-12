@@ -34,6 +34,7 @@ from agentic_gan.tools.selection import (
     select_generator,
     temporal_facts,
 )
+from agentic_gan.utils.ctgan_settings import V2
 from agentic_gan.utils.datasets import DATASETS
 from agentic_gan.utils.synthetic import IS_SYNTHETIC
 
@@ -47,6 +48,9 @@ CTGAN_DEFAULTS = {
 }
 # The CTGAN settings a retry may move, each inside its gan_bounds range.
 SETTING_NAMES = ("epochs", "pac", "discriminator_steps", "batch_size")
+BANK_V2_POOL_ROWS = 60_000
+BANK_V2_RAKE_COLUMNS = ("job", "month", "poutcome", "marital", "_day_bin")
+BANK_V2_DAY_BINS = (0, 5, 10, 15, 20, 25, 31)
 FIDELITY_TOKENS = ("column_distance", "correlation", "ks", "js", "fidelity")
 # A constant cohort is the horizon id, not a ratio the generator should learn.
 HORIZON_LABEL = "cohort"
@@ -58,7 +62,8 @@ EXPLAIN_PROMPT = (
     "Quote the specific numbers from those steps (row counts, limits, column counts). Set "
     "`generator` to exactly the value of `generator` in the context ('none' when no generator was "
     "chosen). You never choose, change or recommend a different generator, and you never change a "
-    "rule, threshold or gate. Keep the explanation under 150 words."
+    "rule, threshold or gate. Write at most two sentences: say what the gates checked and what "
+    "they mean for this dataset, naming the dataset and quoting its row and column counts."
 )
 
 RETRY_PROMPT = (
@@ -68,6 +73,8 @@ RETRY_PROMPT = (
     "the inclusive range given for that setting in `limits`; a setting whose range has equal low "
     "and high cannot change, so return its current value. batch_size must be divisible by pac. If "
     "`privacy_failed` is true the generator may be copying real rows, so do not raise epochs. "
+    "For Bank Marketing, the documented v2 run improved fidelity with 300 epochs, pac 5 and "
+    "three discriminator steps; 600 epochs made it worse. Its sampling recipe is fixed by code. "
     "Explain in `reason` which failed checks or columns your changes target. You never change a "
     "rule, threshold, range or the choice of generator."
 )
@@ -98,6 +105,8 @@ def _rule_hash(config: RunConfig) -> str:
         "gan_bounds": config.gan_bounds,
         "step_order": STEP_ORDER,
         "ctgan_defaults": CTGAN_DEFAULTS,
+        "bank_v2_settings": {name: V2[name] for name in SETTING_NAMES},
+        "bank_v2_sampling": (BANK_V2_POOL_ROWS, BANK_V2_RAKE_COLUMNS, BANK_V2_DAY_BINS),
         "epoch_step": EPOCH_STEP,
         "privacy_checks": sorted(PRIVACY_CHECKS),
         "minority_min": params["minority_min"].default,
@@ -441,14 +450,18 @@ def _rule_retry(
 ) -> tuple[dict[str, int], str, str]:
     """The deterministic retry, with no logging: (new settings, rule name, rationale).
 
-    More epochs inside gan_bounds when a fidelity check failed, unless a privacy check failed
-    too. The LLM proposer uses this as its fallback.
+    Bank v2 uses pac 5 and three discriminator steps when bounds allow them. Other retries
+    add epochs after a fidelity failure unless privacy failed. The LLM uses this as fallback.
     """
     failed = _failed_hard_checks(request)
     privacy = _privacy_failed(failed)
     fidelity = _matches(failed, FIDELITY_TOKENS)
     bounds = request.config.gan_bounds
     previous = settings["epochs"]
+    if _bank_v2_enabled(request):
+        updated = {**settings, "pac": V2["pac"],
+                   "discriminator_steps": V2["discriminator_steps"]}
+        return updated, "hyperparameter_retry", "Bank v2: pac 5 and three discriminator steps"
     if privacy or not fidelity or "epochs" not in bounds:
         rationale = "no privacy-safe adjustment" if privacy else "retry has no legal adjustment"
         return settings, "retry_unchanged", rationale
@@ -460,6 +473,16 @@ def _rule_retry(
     updated = {**settings, "epochs": proposed}
     rationale = f"epochs move from {previous} to {proposed} inside gan_bounds"
     return updated, "hyperparameter_retry", rationale
+
+
+def _bank_v2_enabled(request: ModelSelectionInput) -> bool:
+    if request.config.dataset_name != "bank_marketing" or request.attempt != 2:
+        return False
+    bounds = request.config.gan_bounds
+    return all(
+        name in bounds and bounds[name][0] <= V2[name] <= bounds[name][1]
+        for name in ("pac", "discriminator_steps")
+    )
 
 
 def _normalize(answer: RetrySettings, limits: dict[str, tuple[int, int]]) -> dict[str, int] | None:
@@ -596,7 +619,7 @@ def _log_unsupported_adjustments(request: ModelSelectionInput, run: RunDir) -> N
     if report is None or report.diagnosis is None:
         return
     for adjustment in dict.fromkeys(report.diagnosis.adjustments):
-        if adjustment in UNSUPPORTED_ADJUSTMENTS:
+        if adjustment in UNSUPPORTED_ADJUSTMENTS and not _bank_v2_enabled(request):
             log_decision(
                 "model_selection",
                 "unsupported_adjustment",
@@ -651,21 +674,61 @@ def _train_ctgan(
     sets = []
     positives = request.preprocess.baseline_train_positives
     negatives = request.preprocess.baseline_train_negatives
+    bank_v2 = _bank_v2_enabled(request)
+    if bank_v2:
+        from agentic_gan.tools.ctgan_fill import raked_sample, rule_mask
+
+        largest = max(
+            fill_rows(level, positives, negatives) for level in request.config.fill_levels
+        )
+        pool_rows = max(BANK_V2_POOL_ROWS, largest)
+        log_decision(
+            "model_selection", "sampling_recipe",
+            {"attempt": attempt, "recipe": "bank_v2", "pool_rows": pool_rows,
+             "rake_columns": BANK_V2_RAKE_COLUMNS, "conditional": False},
+            "SET", "Apply the documented Bank v2 sampling recipe to training rows only.", run=run,
+        )
+        log_progress("model_selection", f"sample Bank v2 pool rows={pool_rows}",
+                     tool="sample_synthetic", next_action="rake pool and write fill levels")
+        pool = sample_synthetic(
+            model, pool_rows, target_value=positive, seed=request.config.split_seed,
+            drop_duplicates_of=train, row_filter=rule_mask("bank_marketing"),
+            conditional=False, max_rounds=100,
+        )
+        if len(pool) != pool_rows:
+            raise ValueError(f"Bank v2 pool has {len(pool)} of {pool_rows} required rows")
+        reference = train.loc[train[target] == positive]
+        log_progress(
+            "model_selection", f"rake Bank v2 pool to {len(reference)} training subscribers",
+            tool="raked_sample", next_action="write nested fill levels",
+        )
+        binned_pool = pool.assign(
+            _day_bin=pd.cut(pool["day_of_month"], BANK_V2_DAY_BINS).astype(str)
+        )
+        binned_reference = reference.assign(
+            _day_bin=pd.cut(reference["day_of_month"], BANK_V2_DAY_BINS).astype(str)
+        )
+        picked = raked_sample(
+            binned_pool, binned_reference, largest, request.config.split_seed,
+            list(BANK_V2_RAKE_COLUMNS),
+        ).drop(columns="_day_bin")
     for level in request.config.fill_levels:
         count = fill_rows(level, positives, negatives)
-        log_progress(
-            "model_selection",
-            f"sample fill={level:g} rows={count}",
-            tool="sample_synthetic",
-            next_action="write synthetic CSV",
-        )
-        sample = sample_synthetic(
-            model,
-            count,
-            target_value=positive,
-            seed=request.config.split_seed,
-            drop_duplicates_of=train,
-        )
+        if bank_v2:
+            log_progress(
+                "model_selection", f"write Bank v2 fill={level:g} rows={count}",
+                tool="raked_sample", next_action="write synthetic CSV",
+            )
+            sample = picked.head(count).copy()
+        else:
+            log_progress(
+                "model_selection", f"sample fill={level:g} rows={count}",
+                tool="sample_synthetic", next_action="write synthetic CSV",
+            )
+            sample = sample_synthetic(
+                model, count, target_value=positive, seed=request.config.split_seed,
+                drop_duplicates_of=train,
+            )
         if len(sample) != count:
             raise ValueError(
                 f"synthetic rows {len(sample)} do not match fill_rows {count} at {level}"
