@@ -141,9 +141,9 @@ def test_diagnostic_lines_cope_with_missing_and_present_meta():
     assert "not recorded" in _fill().range_lines({})[1]
     meta = {
         "selection": {
-            "status": "selected", "generator": "wgan_gp", "trainable": False,
+            "status": "selected", "generator": "wgan_gp", "trainable": True,
             "fallback": "ctgan", "rationale": "Every feature is numeric.",
-            "override": "CTGAN was trained as the documented comparator (rule PB-3).",
+            "override": "CTGAN was trained as the EDA comparator (rule PB-3).",
             "steps": [
                 {"rule": "size_gate", "outcome": "PASS"},
                 {"rule": "minority_gate", "outcome": "FORBIDDEN_CLASS_ONLY"},

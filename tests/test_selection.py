@@ -51,6 +51,7 @@ from agentic_gan.tools.selection import (
     ColumnSpec,
     DataCharacteristics,
     DatasetStructure,
+    backup_eligible,
     select_generator,
     temporal_facts,
 )
@@ -256,7 +257,7 @@ def test_polish_all_numeric_documents_wgan_fallback():
     ))
     _assert_dcgan_excluded(result)
     assert result.generator == "wgan_gp"
-    assert result.trainable is False
+    assert result.trainable is True  # wgan_gp is now trainable
     assert result.fallback == "ctgan"
     assert "CTGAN" in result.rationale
     assert _step(result, "fallback").outcome == "DOCUMENTED"
@@ -395,6 +396,8 @@ class _Gan:
         self.trains = []
         self.samples = []
         self.sample_options = []
+        self.wgan_trains = []
+        self.wgan_samples = []
 
     def train(self, train_df, target_col, **kwargs):
         self.trains.append((train_df.copy(), kwargs))
@@ -413,6 +416,32 @@ class _Gan:
         frame[drop_duplicates_of.columns[-1]] = target_value
         return frame
 
+    def wgan_train(self, train_df, target_col, positive=1, discrete_columns=(), **kwargs):
+        self.wgan_trains.append((train_df.copy(), kwargs))
+        log_path = kwargs.get("log_path")
+        if log_path is not None:
+            pd.DataFrame(
+                {"Epoch": [1], "Generator Loss": [0.1], "Discriminator Loss": [0.2],
+                 "Gradient Penalty": [0.5]}
+            ).to_csv(log_path, index=False)
+        feature_cols = [c for c in train_df.columns if c != target_col]
+        return SimpleNamespace(
+            target_col=target_col, positive=positive, columns=feature_cols,
+            numeric_ranges={}, integer_valued=set(), discrete_columns=list(discrete_columns),
+            transformer=None,
+        )
+
+    def wgan_save(self, model, path):
+        Path(path).write_bytes(b"wgangp")
+
+    def wgan_sample(self, model, n, *, seed, row_filter=None, drop_duplicates_of=None, **kwargs):
+        from agentic_gan.utils.synthetic import IS_SYNTHETIC
+        self.wgan_samples.append(n)
+        frame = pd.DataFrame({name: [1] * n for name in model.columns})
+        frame[model.target_col] = model.positive
+        frame[IS_SYNTHETIC] = 1
+        return frame
+
 
 @pytest.fixture
 def gan(monkeypatch):
@@ -420,6 +449,9 @@ def gan(monkeypatch):
     monkeypatch.setattr("agentic_gan.tools.ctgan.train_ctgan", tool.train)
     monkeypatch.setattr("agentic_gan.tools.ctgan.save_model", tool.save)
     monkeypatch.setattr("agentic_gan.tools.ctgan.sample_synthetic", tool.sample)
+    monkeypatch.setattr("agentic_gan.tools.wgan_gp.train_wgan_gp", tool.wgan_train)
+    monkeypatch.setattr("agentic_gan.tools.wgan_gp.save_model", tool.wgan_save)
+    monkeypatch.setattr("agentic_gan.tools.wgan_gp.sample_wgan_gp", tool.wgan_sample)
     return tool
 
 
@@ -617,6 +649,9 @@ def test_default_selects_timegan_and_does_not_train(tmp_path, gan):
 
 
 def test_constant_polish_cohort_does_not_make_ratios_mixed(tmp_path, gan):
+    # A constant cohort column is hidden as the horizon label; the remaining features are
+    # all-numeric, so the rule selects wgan_gp trainable (Step 6). Step 7 wires dispatch
+    # so the WGAN-GP path is now taken for the all-numeric route.
     rows, positives = 2000, 600
     frame = pd.DataFrame({
         "A1": range(rows),
@@ -627,10 +662,10 @@ def test_constant_polish_cohort_does_not_make_ratios_mixed(tmp_path, gan):
     config = _config(tmp_path, dataset_name="polish", target="bankrupt", positive_class=1)
     request, run, _path = _request(tmp_path, config, frame, positives, rows - positives)
     output = run_model_selection(request, run)
-    assert output.status is Status.SKIPPED
-    assert output.generator == "wgan_gp"
-    assert "CTGAN" in output.rationale
-    assert gan.trains == []
+    assert output.status is Status.SUCCESS  # wgan_gp is trainable and dispatched
+    assert output.generator == "wgan_gp"  # all-numeric route trains WGAN-GP
+    assert gan.wgan_trains  # WGAN-GP stub was called
+    assert gan.trains == []  # CTGAN was not called
 
 
 def test_pooled_polish_cohorts_do_not_train(tmp_path, gan):
@@ -717,23 +752,25 @@ def test_every_privacy_check_name_blocks_more_epochs(tmp_path, gan, check):
     assert _logged(run, "retry_unchanged") == "UNCHANGED"
 
 
-def test_third_attempt_documents_wgan_and_does_not_train(tmp_path, gan):
-    # Empty gan_bounds → ladder exhausts; attempt 3 still documents wgan_gp and does not train.
+def test_third_attempt_trains_wgan_gp_backup(tmp_path, gan):
+    # Attempt 3 on the CTGAN (mixed) route: backup_eligible is True for Bank
+    # (500 positives == minority_min, so FORBIDDEN_CLASS_ONLY is NOT raised).
+    # Step 7 wires the WGAN-GP backup, so it now trains (mocked) and returns SUCCESS.
     frame = _bank_frame()
     request, run, _path = _request(
         tmp_path, _config(tmp_path), frame, 500, 1500, attempt=3,
         previous=_fail_report("column_distance"),
     )
-    output = run_model_selection(request, run, client=FakeLLM([]))
-    assert output.status is Status.SKIPPED
+    output = run_model_selection(request, run)
+    assert output.status is Status.SUCCESS  # WGAN-GP backup trains
     assert output.generator == "wgan_gp"
-    assert gan.trains == []
-    assert _logged(run, "fallback") == "SKIPPED"
-    assert _logged(run, "retry_unchanged") == "UNCHANGED"
+    assert gan.wgan_trains  # WGAN-GP stub was called
+    assert gan.trains == []  # CTGAN was not called on attempt 3
 
 
-def test_attempt_3_trains_ctgan_with_a_new_ladder_rung(tmp_path, gan):
-    # Until #124, attempt 3 trains CTGAN; settings must differ from attempts 1 and 2.
+def test_attempt_3_trains_ctgan_with_a_new_ladder_rung(tmp_path, gan, monkeypatch):
+    # With the backup disabled, CTGAN still advances through its retry ladder.
+    monkeypatch.setattr("agentic_gan.agents.model_selection.WGAN_BACKUP_ENABLED", False)
     from agentic_gan.orchestrator.decisions import log_decision
 
     frame = _bank_frame()
@@ -1663,3 +1700,146 @@ def test_model_selection_in_the_graph_uses_the_fake_explanation(tmp_path, gan):
     steps = read_decisions(run).query("rule == 'llm_step' and agent == 'model_selection'")
     assert steps.outcome.iloc[0] == EXPLAIN_ANSWER
     assert gan.trains
+
+
+# --- Step 6: backup_eligible and selection rule updates ---------------------------------------
+
+
+def _all_numeric_data(**overrides):
+    fields = {
+        "dataset": "polish",
+        "rows": 6000,
+        "target": "bankrupt",
+        "minority_count": 800,
+        "minority_rate": 800 / 6000,
+        "columns": (
+            _column("A1", "numeric"),
+            _column("A2", "numeric"),
+            _column("bankrupt", "numeric"),
+        ),
+    }
+    fields.update(overrides)
+    return DataCharacteristics(**fields)
+
+
+def test_all_numeric_selects_wgan_gp_trainable():
+    result = select_generator(_all_numeric_data())
+    assert result.generator == "wgan_gp"
+    assert result.trainable is True
+    assert result.fallback == "ctgan"
+
+
+def test_mixed_selects_ctgan_trainable_fallback_wgan_gp():
+    result = select_generator(_data())
+    assert result.generator == "ctgan"
+    assert result.trainable is True
+    assert result.fallback == "wgan_gp"
+
+
+def test_default_complete_selects_timegan_not_trainable():
+    result = select_generator(_data(
+        dataset="default",
+        rows=10000,
+        target="y",
+        minority_count=2000,
+        minority_rate=0.2,
+        columns=(
+            _column("y", "numeric"),
+            *[_column(c, "numeric") for c in DEFAULT_WIDE_TEMPORAL],
+        ),
+        entity_in_table=True,
+        time_index_ready=True,
+        wide_steps=6,
+        repeated_observation=True,
+    ))
+    assert result.generator == "timegan"
+    assert result.trainable is False
+    assert result.fallback == "ctgan"
+
+
+def test_wgan_gp_fallback_message_no_longer_says_not_implemented():
+    result = select_generator(_all_numeric_data())
+    fallback_step = _step(result, "fallback")
+    assert "not implemented" not in fallback_step.rationale.lower()
+    assert "implemented" in fallback_step.rationale.lower()
+
+
+def test_timegan_fallback_message_still_says_not_implemented():
+    result = select_generator(_data(
+        dataset="default",
+        rows=10000,
+        target="y",
+        minority_count=2000,
+        minority_rate=0.2,
+        columns=(
+            _column("y", "numeric"),
+            *[_column(c, "numeric") for c in DEFAULT_WIDE_TEMPORAL],
+        ),
+        entity_in_table=True,
+        time_index_ready=True,
+        wide_steps=6,
+        repeated_observation=True,
+    ))
+    fallback_step = _step(result, "fallback")
+    assert "not implemented" in fallback_step.rationale.lower()
+
+
+def test_backup_eligible_true_for_bank_like_mixed():
+    # Bank: mixed table, minority_count 3173 (>= 500), fallback wgan_gp
+    result = select_generator(_data())
+    eligible, reason = backup_eligible(result)
+    assert eligible is True
+    assert reason == "eligible"
+
+
+def test_backup_eligible_false_below_minority_min():
+    result = select_generator(_data(minority_count=400, minority_rate=400 / 27126))
+    eligible, reason = backup_eligible(result)
+    assert eligible is False
+    assert "FORBIDDEN_CLASS_ONLY" in reason
+
+
+def test_backup_eligible_false_for_skipped():
+    result = select_generator(_data(rows=100, minority_count=10, minority_rate=0.1))
+    assert result.status == "skipped"
+    eligible, reason = backup_eligible(result)
+    assert eligible is False
+    assert "skipped" in reason
+
+
+def test_backup_eligible_false_when_fallback_is_not_wgan_gp():
+    # TimeGAN result has fallback = "ctgan"
+    result = select_generator(_data(
+        dataset="default",
+        rows=10000,
+        target="y",
+        minority_count=2000,
+        minority_rate=0.2,
+        columns=(
+            _column("y", "numeric"),
+            *[_column(c, "numeric") for c in DEFAULT_WIDE_TEMPORAL],
+        ),
+        entity_in_table=True,
+        time_index_ready=True,
+        wide_steps=6,
+        repeated_observation=True,
+    ))
+    assert result.fallback == "ctgan"
+    eligible, reason = backup_eligible(result)
+    assert eligible is False
+    assert "not wgan_gp" in reason
+
+
+def test_rule_hash_stable_after_step7(tmp_path):
+    # Covers WGAN defaults, the dataset recipe, and targeted retry options.
+    post_step7_hash = "ec2bc6f99c3000cddf945c87b226b85d1bf1dbd091040651e2695c8619d7bba1"
+    config = _config(tmp_path)
+    assert _rule_hash(config) == post_step7_hash
+
+
+def test_changing_wgan_defaults_changes_rule_hash(tmp_path, monkeypatch):
+    from agentic_gan.agents import model_selection as ms
+    config = _config(tmp_path)
+    original_hash = _rule_hash(config)
+    monkeypatch.setattr(ms, "WGAN_DEFAULTS", {**ms.WGAN_DEFAULTS, "epochs": 999})
+    assert _rule_hash(config) != original_hash

@@ -1028,7 +1028,10 @@ def test_a_proposal_outside_the_limits_is_rejected_and_the_ladder_applies(
     assert gan.trains[-1][1]["epochs"] == expected.settings["epochs"]
 
 
-def test_a_proposal_equal_to_previous_settings_is_replaced_by_the_next_rung(tmp_path, gan):
+def test_a_proposal_equal_to_previous_settings_is_replaced_by_the_next_rung(
+    tmp_path, gan, monkeypatch
+):
+    monkeypatch.setattr(selection, "WGAN_BACKUP_ENABLED", False)
     # Attempt 3: LLM repeats attempt-2 settings → reject → second ladder candidate.
     config = _config(tmp_path, gan_bounds=dict(DEFAULT_GAN_BOUNDS))
     base = {**BANK_V2, "sampling_mode": "conditional", "rake_columns": [], "epochs": 300}
@@ -1119,7 +1122,8 @@ def test_privacy_failure_never_raises_epochs(tmp_path, gan, privacy, extras):
     assert applied["epochs"] <= previous["epochs"]
 
 
-def test_attempt_three_differs_from_attempts_one_and_two(tmp_path, gan):
+def test_attempt_three_differs_from_attempts_one_and_two(tmp_path, gan, monkeypatch):
+    monkeypatch.setattr(selection, "WGAN_BACKUP_ENABLED", False)
     config = _config(tmp_path, gan_bounds=dict(DEFAULT_GAN_BOUNDS))
     frame = _bank_frame()
     run = create_run(config, run_id="f-seq", runs_dir=tmp_path / "runs")

@@ -340,7 +340,7 @@ def select_generator(
         add(
             "fallback",
             "NOT_REACHED",
-            "The CTGAN fallback is attempt 3, after two quality-gate failures.",
+            "The WGAN-GP backup is attempt 3, after two quality-gate failures.",
         )
         return chosen("ctgan", True, "wgan_gp", rationale)
 
@@ -349,7 +349,26 @@ def select_generator(
     add(
         "fallback",
         "DOCUMENTED",
-        "WGAN-GP is not implemented. Documented fallback is CTGAN.",
+        "WGAN-GP is implemented. CTGAN is the fallback if WGAN-GP fails.",
         {"fallback": "ctgan"},
     )
-    return chosen("wgan_gp", False, "ctgan", rationale)
+    return chosen("wgan_gp", True, "ctgan", rationale)
+
+
+def backup_eligible(result: SelectionResult) -> tuple[bool, str]:
+    """Return (eligible, reason) for a WGAN-GP backup on attempt 3.
+
+    False when: minority_gate is FORBIDDEN_CLASS_ONLY, result is skipped, or fallback != wgan_gp.
+    """
+    if result.status == "skipped":
+        return False, "selection was skipped"
+    if result.fallback != "wgan_gp":
+        return False, f"fallback is {result.fallback!r}, not wgan_gp"
+    for step in result.steps:
+        if step.rule == "minority_gate" and step.outcome == "FORBIDDEN_CLASS_ONLY":
+            return False, (
+                f"minority_gate is FORBIDDEN_CLASS_ONLY "
+                f"(minority_count {step.inputs.get('minority_count')} "
+                f"< {step.inputs.get('minority_min')})"
+            )
+    return True, "eligible"

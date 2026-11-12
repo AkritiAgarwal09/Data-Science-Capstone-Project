@@ -212,8 +212,8 @@ def _override(result: SelectionResult) -> str:
         )
     if result.generator == "wgan_gp":
         return (
-            "CTGAN was trained as the documented comparator (rule PB-3) because WGAN-GP, the "
-            "rule's choice for an all-numeric table, is not implemented."
+            "CTGAN was trained as the EDA comparator (rule PB-3) alongside WGAN-GP, the "
+            "rule's choice for an all-numeric table."
         )
     return f"CTGAN was trained although the rule selected {result.generator}."
 
