@@ -130,6 +130,31 @@ class AttemptRecord:
     failed_checks: list[str]
 
 
+@dataclass(frozen=True)
+class LadderResult:
+    """One deterministic retry proposal from the quality-gate ladder."""
+
+    settings: dict
+    trigger: str
+    rung: int
+    exhausted: bool
+    rationale: str
+
+
+ROW3_CHECKS = frozenset(
+    {
+        "mean_column_distance",
+        "spearman_diff",
+        "cramers_v_diff",
+        "real_vs_synthetic_auc",
+    }
+)
+LADDER_EPOCHS_CAP = 600
+LADDER_EPOCHS_FLOOR = 300
+LADDER_STEPS_CAP = 5
+LADDER_BATCH_CAP = 1000
+
+
 def settings_key(settings: dict) -> tuple:
     """Comparable key: ints as ints, rake_columns as a sorted tuple (order-insensitive)."""
     return (
@@ -600,6 +625,8 @@ def _rule_retry(
 
     More epochs inside gan_bounds when a fidelity check failed, unless a privacy check failed
     too. The LLM proposer uses this as its fallback.
+
+    Kept for Step 4 compatibility; Step 5 wires `_ladder_retry` in its place.
     """
     failed = _failed_hard_checks(request)
     privacy = _privacy_failed(failed)
@@ -617,6 +644,266 @@ def _rule_retry(
     updated = {**settings, "epochs": proposed}
     rationale = f"epochs move from {previous} to {proposed} inside gan_bounds"
     return updated, "hyperparameter_retry", rationale
+
+
+def _copy_seven(settings: dict) -> dict:
+    return {
+        "epochs": int(settings["epochs"]),
+        "batch_size": int(settings["batch_size"]),
+        "pac": int(settings["pac"]),
+        "discriminator_steps": int(settings["discriminator_steps"]),
+        "sampling_mode": settings["sampling_mode"],
+        "rule_filter": bool(settings["rule_filter"]),
+        "rake_columns": list(settings["rake_columns"]),
+    }
+
+
+def _report_ladder_signals(report: QualityReport | None) -> tuple[list[str], dict[str, float]]:
+    """Hard failed check names, and all column_distance:<col> values from the report."""
+    if report is None:
+        return [], {}
+    hard_failed: list[str] = []
+    distances: dict[str, float] = {}
+    for level in report.levels:
+        for check in level.checks:
+            if check.name.startswith("column_distance:"):
+                distances[check.name.split(":", 1)[1]] = float(check.value)
+            if check.hard and not check.passed:
+                hard_failed.append(check.name)
+            elif (
+                not check.hard
+                and not check.passed
+                and check.name.startswith("column_distance:")
+            ):
+                # Soft per-column failures participate in row-1 matching.
+                hard_failed.append(check.name)
+    # Preserve order, drop duplicate names while keeping first occurrence.
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for name in hard_failed:
+        if name not in seen:
+            seen.add(name)
+            ordered.append(name)
+    return ordered, distances
+
+
+def _numeric_bound(
+    name: str, value: int, gan_bounds: dict, previous: int
+) -> int:
+    """Clamp into gan_bounds when present; otherwise pin to previous (Q2)."""
+    if name not in gan_bounds:
+        return int(previous)
+    low, high = gan_bounds[name]
+    low_i, high_i = math.ceil(low), math.floor(high)
+    return int(min(max(int(value), low_i), high_i))
+
+
+def _snap_batch(batch: int, pac: int, gan_bounds: dict, previous_batch: int) -> int:
+    """Snap batch_size to a multiple of pac inside its bound (or pin previous if impossible)."""
+    if pac < 1:
+        return int(previous_batch)
+    if "batch_size" in gan_bounds:
+        low, high = gan_bounds["batch_size"]
+        low_i, high_i = math.ceil(low), math.floor(high)
+    else:
+        return int(previous_batch)
+    batch = int(min(max(int(batch), low_i), high_i))
+    if batch % pac == 0:
+        return batch
+    snapped = batch // pac * pac
+    if snapped < low_i:
+        snapped += pac
+    if low_i <= snapped <= high_i:
+        return int(snapped)
+    return int(previous_batch)
+
+
+def _apply_ladder_invariants(
+    candidate: dict,
+    previous: dict,
+    gan_bounds: dict,
+    *,
+    privacy_failed: bool,
+    allowed_rake: Sequence[str],
+) -> dict:
+    """Global invariants (d): privacy epochs, bounds, batch%pac, options, rake subset."""
+    out = _copy_seven(candidate)
+    for name in SETTING_NAMES:
+        out[name] = _numeric_bound(name, int(out[name]), gan_bounds, int(previous[name]))
+    if privacy_failed:
+        out["epochs"] = min(int(out["epochs"]), int(previous["epochs"]))
+        if "epochs" in gan_bounds:
+            out["epochs"] = _numeric_bound(
+                "epochs", out["epochs"], gan_bounds, int(previous["epochs"])
+            )
+    out["batch_size"] = _snap_batch(
+        int(out["batch_size"]), int(out["pac"]), gan_bounds, int(previous["batch_size"])
+    )
+    if out["sampling_mode"] not in RETRY_OPTIONS["sampling_mode"]:
+        out["sampling_mode"] = previous["sampling_mode"]
+    if out["rule_filter"] not in RETRY_OPTIONS["rule_filter"]:
+        out["rule_filter"] = bool(previous["rule_filter"])
+    allowed = set(allowed_rake)
+    rake: list[str] = []
+    seen: set[str] = set()
+    for name in out["rake_columns"]:
+        if name in allowed and name not in seen:
+            seen.add(name)
+            rake.append(name)
+    out["rake_columns"] = rake
+    return out
+
+
+def _row1_rake(
+    previous: dict,
+    failed: list[str],
+    distances: dict[str, float],
+    discrete_columns: Sequence[str],
+    allowed_rake: Sequence[str],
+) -> list[str]:
+    discrete = set(discrete_columns)
+    allowed = set(allowed_rake)
+    cat_distances = {col: distances[col] for col in distances if col in discrete}
+    # Distance desc, then name asc (alphabetical tie-break).
+    worst_order = sorted(cat_distances, key=lambda col: (-cat_distances[col], col))
+    triggering: list[str] = []
+    for name in failed:
+        if name.startswith("column_distance:"):
+            col = name.split(":", 1)[1]
+            if col in discrete and col not in triggering:
+                triggering.append(col)
+    if "worst_column_distance" in failed and not triggering and worst_order:
+        triggering = [worst_order[0]]
+    # Triggering columns in worst-first order, then next two worst categoricals.
+    picked: list[str] = []
+    for col in worst_order:
+        if col in triggering and col not in picked:
+            picked.append(col)
+    for col in triggering:
+        if col not in picked:
+            picked.append(col)
+    extras = 0
+    for col in worst_order:
+        if col in picked:
+            continue
+        picked.append(col)
+        extras += 1
+        if extras >= 2:
+            break
+    for col in previous["rake_columns"]:
+        if col not in picked:
+            picked.append(col)
+    return [col for col in picked if col in allowed]
+
+
+def _ladder_retry(
+    previous_settings: dict,
+    history: list[AttemptRecord],
+    request: ModelSelectionInput,
+    discrete_columns: list[str],
+    allowed_rake: list[str],
+) -> LadderResult:
+    """Deterministic retry ladder. Pure: no logging, no I/O, no mutation of inputs."""
+    previous = _copy_seven(previous_settings)
+    history_keys = {settings_key(record.settings) for record in history}
+    failed, distances = _report_ladder_signals(request.previous_report)
+    privacy_failed = bool(set(failed) & PRIVACY_CHECKS)
+    gan_bounds = request.config.gan_bounds
+    discrete = set(discrete_columns)
+
+    candidates: list[tuple[int, str, dict]] = []
+
+    # Row 1: worst_column_distance or discrete column_distance:<col>.
+    row1_triggers = [
+        name
+        for name in failed
+        if name == "worst_column_distance"
+        or (
+            name.startswith("column_distance:")
+            and name.split(":", 1)[1] in discrete
+        )
+    ]
+    if row1_triggers:
+        trigger = row1_triggers[0]
+        proposed = _copy_seven(previous)
+        proposed["sampling_mode"] = "unconditional"
+        proposed["rake_columns"] = _row1_rake(
+            previous, failed, distances, discrete_columns, allowed_rake
+        )
+        candidates.append((1, trigger, proposed))
+
+    # Row 2: any rule:* check.
+    rule_triggers = [name for name in failed if name.startswith("rule:")]
+    if rule_triggers:
+        proposed = _copy_seven(previous)
+        proposed["rule_filter"] = True
+        candidates.append((2, rule_triggers[0], proposed))
+
+    # Row 3: mean distance / correlations / detectability.
+    row3_triggers = [name for name in failed if name in ROW3_CHECKS]
+    if row3_triggers:
+        proposed = _copy_seven(previous)
+        proposed["discriminator_steps"] = min(
+            int(previous["discriminator_steps"]) + 2, LADDER_STEPS_CAP
+        )
+        proposed["pac"] = 5
+        proposed["epochs"] = min(int(previous["epochs"]) + EPOCH_STEP, LADDER_EPOCHS_CAP)
+        candidates.append((3, row3_triggers[0], proposed))
+
+    # Row 4: privacy.
+    privacy_triggers = [name for name in failed if name in PRIVACY_CHECKS]
+    if privacy_triggers:
+        proposed = _copy_seven(previous)
+        proposed["epochs"] = max(int(previous["epochs"]) - EPOCH_STEP, LADDER_EPOCHS_FLOOR)
+        proposed["batch_size"] = min(int(previous["batch_size"]) * 2, LADDER_BATCH_CAP)
+        candidates.append((4, privacy_triggers[0], proposed))
+
+    # Row 5: catch-all last resort (Q4).
+    proposed = _copy_seven(previous)
+    proposed["epochs"] = int(previous["epochs"]) + EPOCH_STEP
+    candidates.append((5, "none", proposed))
+
+    for rung, trigger, raw in candidates:
+        applied = _apply_ladder_invariants(
+            raw,
+            previous,
+            gan_bounds,
+            privacy_failed=privacy_failed,
+            allowed_rake=allowed_rake,
+        )
+        key = settings_key(applied)
+        if key == settings_key(previous):
+            continue
+        if key in history_keys:
+            continue
+        changed = [
+            name
+            for name in SEVEN_KNOBS
+            if (
+                name == "rake_columns"
+                and sorted(applied[name]) != sorted(previous[name])
+            )
+            or (name != "rake_columns" and applied[name] != previous[name])
+        ]
+        rationale = (
+            f"ladder rung {rung} on {trigger}: "
+            + ", ".join(f"{name}={applied[name]!r}" for name in changed)
+        )
+        return LadderResult(
+            settings=applied,
+            trigger=trigger,
+            rung=rung,
+            exhausted=False,
+            rationale=rationale,
+        )
+
+    return LadderResult(
+        settings=_copy_seven(previous),
+        trigger="none",
+        rung=5,
+        exhausted=True,
+        rationale="every rung is used up",
+    )
 
 
 def _normalize(
